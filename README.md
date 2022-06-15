@@ -30,7 +30,7 @@ go build server.go
 To build the client, run :
 ```
 cd client
-go build client.go ssl.go
+go build client.go
 ```
 
 Make sure to run both the server and client from within their directories or change the certificate and key paths in the code so that the files are found.

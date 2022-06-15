@@ -1,3 +1,3 @@
-module github.com/wolfSSL/go-wolfssl
+module github.com/wolfssl/go-wolfssl
 
 go 1.13

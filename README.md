@@ -23,13 +23,13 @@ go get -u github.com/wolfssl/go-wolfssl
 
 To build the server, run :
 ```
-cd server
+cd examples/server
 go build server.go
 ```
 
 To build the client, run :
 ```
-cd client
+cd examples/client
 go build client.go
 ```
 

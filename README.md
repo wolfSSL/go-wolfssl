@@ -35,6 +35,8 @@ go build client.go
 
 Make sure to run both the server and client from within their directories or change the certificate and key paths in the code so that the files are found.
 
+**NOTE**: If you have wolfSSL installed in a non-standard location, edit the `CFLAGS` and `LDFLAGS` specifications in `ssl.go` to correspond to your custom installation path.
+
 ## Support
 
 For inquiries, suggestions and feedback please contact support@wolfssl.com.

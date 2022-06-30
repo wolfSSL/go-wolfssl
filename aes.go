@@ -17,7 +17,18 @@ const AES_256_KEY_SIZE = int(C.AES_256_KEY_SIZE)
 const AES_ENCRYPTION   = int(C.AES_ENCRYPTION)
 const AES_DECRYPTION   = int(C.AES_DECRYPTION)
 
+const INVALID_DEVID    = int(C.INVALID_DEVID)
+
 type Aes = C.struct_Aes
+
+func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) C.int {
+        /* TODO: HANDLE NON NIL HEAP */
+    return C.wc_AesInit(aes, unsafe.Pointer(nil), C.int(devId))
+}
+
+func Wc_AesFree(aes *C.struct_Aes) {
+    C.wc_AesFree(aes)
+}
 
 func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int) C.int {
     return C.wc_AesSetKey(aes, (*C.uchar)(unsafe.Pointer(&key[0])), C.word32(length),(*C.uchar)(unsafe.Pointer(&iv[0])), C.int(dir))

@@ -4,6 +4,14 @@ package wolfSSL
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hash.h>
+// #undef NO_MD5
+//
+// #ifdef NO_MD5
+// #define WC_MD5_DIGEST_SIZE 1
+// int wc_Md5Hash(const byte* data, word32 len, byte* hash) {
+//      return -999;
+//  }
+// #endif
 import "C"
 import (
     "unsafe"
@@ -17,22 +25,22 @@ const WC_SHA512_DIGEST_SIZE = int(C.WC_SHA512_DIGEST_SIZE)
 
 const WC_SHA256 = int(C.WC_SHA256)
 
-func Wc_Md5Hash(input []byte, inputSz int, output []byte) C.int {
-    return C.wc_Md5Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0])))
+func Wc_Md5Hash(input []byte, inputSz int, output []byte) int {
+    return int(C.wc_Md5Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0]))))
 }
 
-func Wc_ShaHash(input []byte, inputSz int, output []byte) C.int {
-    return C.wc_ShaHash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0])))
+func Wc_ShaHash(input []byte, inputSz int, output []byte) int {
+    return int(C.wc_ShaHash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0]))))
 }
 
-func Wc_Sha256Hash(input []byte, inputSz int, output []byte) C.int {
-    return C.wc_Sha256Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0])))
+func Wc_Sha256Hash(input []byte, inputSz int, output []byte) int {
+    return int(C.wc_Sha256Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0]))))
 }
 
-func Wc_Sha384Hash(input []byte, inputSz int, output []byte) C.int {
-    return C.wc_Sha384Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0])))
+func Wc_Sha384Hash(input []byte, inputSz int, output []byte) int {
+    return int(C.wc_Sha384Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0]))))
 }
 
-func Wc_Sha512Hash(input []byte, inputSz int, output []byte) C.int {
-    return C.wc_Sha512Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0])))
+func Wc_Sha512Hash(input []byte, inputSz int, output []byte) int {
+    return int(C.wc_Sha512Hash((*C.uchar)(unsafe.Pointer(&input[0])), C.word32(inputSz), (*C.uchar)(unsafe.Pointer(&output[0]))))
 }

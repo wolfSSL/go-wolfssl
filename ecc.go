@@ -11,7 +11,7 @@ import (
 
 const ECC_MAX_SIG_SIZE = int(C.ECC_MAX_SIG_SIZE)
 
-type ecc_key = C.struct_ecc_key
+type Ecc_key = C.struct_ecc_key
 
 func Wc_ecc_init(key *C.struct_ecc_key) C.int {
     return C.wc_ecc_init(key)

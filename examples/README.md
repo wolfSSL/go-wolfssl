@@ -34,7 +34,7 @@ An application to hash input files with the chosen algorithm. Located in `hash` 
 
 To build the app, run :
 ```
-go build file-hash.go
+go build fileHash.go
 ```
 
 The usage is as shown below.

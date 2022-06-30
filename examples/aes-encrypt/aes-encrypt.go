@@ -239,6 +239,8 @@ func main() {
 
     sizeCheck(&size)
 
+    wolfSSL.Wc_AesInit(&aes, nil, wolfSSL.INVALID_DEVID)
+
     if operation == "enc" {
         AesEncrypt(aes, inFile, outFile, size)
     } else if operation == "dec" {
@@ -248,4 +250,5 @@ func main() {
         fmt.Println("Usage: ./aesEncrypt <infile name> <outfile name> <enc/dec> <key size>");
     }
 
+    wolfSSL.Wc_AesFree(&aes)
 }

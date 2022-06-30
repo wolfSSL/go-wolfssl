@@ -10,10 +10,10 @@ const BYTE_SZ = 8
 
 func sign_verify(eccKeySz int, hash []byte, printSig int) {
     /* Declare variables */
-    var key wolfSSL.ecc_key
+    var key wolfSSL.Ecc_key
     var rng wolfSSL.WC_RNG
     var sig []byte = nil
-    var max int    = ECC_MAX_SIG_SIZE
+    var max int    = wolfSSL.ECC_MAX_SIG_SIZE
 
     /* Algorithm for mod EG: (C / B) + (C % B != 0 ? 1:0)
      * equivalent to the calculation below              */

@@ -2,16 +2,15 @@ package wolfSSL
 
 // #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
-// #include <wolfssl/options.h>
-// #include <wolfssl/wolfcrypt/hash.h>
-// #undef NO_MD5
-//
 // #ifdef NO_MD5
 // #define WC_MD5_DIGEST_SIZE 1
-// int wc_Md5Hash(const byte* data, word32 len, byte* hash) {
-//      return -999;
+// int wc_Md5Hash(const unsigned char* data, unsigned int len, unsigned char* hash) {
+//      return -174;
 //  }
 // #endif
+//
+// #include <wolfssl/options.h>
+// #include <wolfssl/wolfcrypt/hash.h>
 import "C"
 import (
     "unsafe"

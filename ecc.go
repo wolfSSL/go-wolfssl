@@ -4,6 +4,28 @@ package wolfSSL
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/ecc.h>
+// #include <wolfssl/wolfcrypt/random.h>
+// #ifndef HAVE_ECC
+// #define ECC_MAX_SIG_SIZE 1
+// typedef struct ecc_key {} ecc_key;
+// int wc_ecc_init(ecc_key *key) {
+//      return -174;
+//  }
+// int wc_ecc_free(ecc_key *key) {
+//      return -174;
+//  }
+// int wc_ecc_make_key(WC_RNG* rng, int keysize, ecc_key* key) {
+//      return -174;
+//  }
+// int wc_ecc_sign_hash(const byte* in, word32 inlen, byte* out, word32 *outlen,
+//                      WC_RNG* rng, ecc_key* key) {
+//      return -174;
+//  }
+// int wc_ecc_verify_hash(const byte* sig, word32 siglen, const byte* hash,
+//                        word32 hashlen, int* res, ecc_key* key) {
+//      return -174;
+//  }
+// #endif
 import "C"
 import (
     "unsafe"

@@ -5,6 +5,33 @@ package wolfSSL
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/aes.h>
 // #include <wolfssl/wolfcrypt/pwdbased.h>
+// #ifdef NO_AES
+// #define AES_BLOCK_SIZE   1
+// #define AES_128_KEY_SIZE 1
+// #define AES_192_KEY_SIZE 1
+// #define AES_256_KEY_SIZE 1
+// #define AES_ENCRYPTION   1
+// #define AES_DECRYPTION   1
+// typedef struct Aes {} Aes;
+// int wc_AesInit(Aes* aes, void* heap, int devid) {
+//      return -174;
+//  }
+// int wc_AesFree(Aes* aes) {
+//      return -174;
+//  }
+// int wc_AesSetKey(Aes* aes, const byte* key, word32 len,
+//                 const byte* iv, int dir) {
+//      return -174;
+// }
+// #ifndef HAVE_AES_CBC
+// int wc_AesCbcEncrypt(Aes* aes, byte* out, const byte* in, word32 sz) {
+//      return -174;
+// }
+// int wc_AesCbcDecrypt(Aes* aes, byte* out, const byte* in, word32 sz) {
+//      return -174;
+// }
+// #endif
+// #endif
 import "C"
 import (
     "unsafe"

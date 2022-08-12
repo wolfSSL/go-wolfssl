@@ -35,10 +35,9 @@ Then go to the go-wolfssl directory and if the path to your wolfSSL directory is
 ./generateOptions.sh
 ```
 
-If you have a different path to your wolfSSL directory, create a file called `path.txt` with the right path and run the executable:
+If you have a different path to your wolfSSL directory, run the executable with the right path:
 ```
-echo "../files/wolfssl/" > path.txt
-./generateOptions
+./generateOptions ../files/wolfSSL
 ``` 
 
 options.go is now generated and go-wolfssl can be run with ECC disabled!

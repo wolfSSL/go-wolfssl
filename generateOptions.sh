@@ -2,20 +2,20 @@
 
 OPTIONS_H="../wolfssl/wolfssl/options.h"
 
-if [ -f path.txt ];then
-    WOLFSSL_PATH=`cat path.txt`
-    echo "Found path.txt."
+if [ ! -z $1 ];then
+    WOLFSSL_PATH=$1
+    echo "Path to wolfSSL was supplied."
     
     if [ -f "$WOLFSSL_PATH/wolfssl/options.h" ];then
         OPTIONS_H="$WOLFSSL_PATH/wolfssl/options.h"
     else
-        echo "Couldn't find options.h, please supply the correct path to wolfSSL in path.txt."
+        echo "Couldn't find options.h, please supply the correct path to wolfSSL."
         exit 99
     fi
 else
-    echo "Couldn't find path.txt, defaulting to ../wolfssl path."
+    echo "No path given, defaulting to ../wolfssl path."
     if [ ! -d ../wolfssl ];then
-        echo "Couldn't find wolfSSL in default path, please supply the correct path to wolfSSL in path.txt."
+        echo "Couldn't find wolfSSL in default path, please supply the correct path to wolfSSL."
         exit 99
     fi
 fi

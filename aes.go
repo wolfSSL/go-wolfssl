@@ -69,30 +69,33 @@ const INVALID_DEVID    = int(C.INVALID_DEVID)
 
 type Aes = C.struct_Aes
 
-func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) C.int {
+func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) int {
         /* TODO: HANDLE NON NIL HEAP */
-    return C.wc_AesInit(aes, unsafe.Pointer(nil), C.int(devId))
+    return int(C.wc_AesInit(aes, unsafe.Pointer(nil), C.int(devId)))
 }
 
 func Wc_AesFree(aes *C.struct_Aes) {
     C.wc_AesFree(aes)
 }
 
-func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int) C.int {
-    return C.wc_AesSetKey(aes, (*C.uchar)(unsafe.Pointer(&key[0])), C.word32(length),(*C.uchar)(unsafe.Pointer(&iv[0])), C.int(dir))
+func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int) int {
+    return int(C.wc_AesSetKey(aes, (*C.uchar)(unsafe.Pointer(&key[0])), C.word32(length),
+               (*C.uchar)(unsafe.Pointer(&iv[0])), C.int(dir)))
 }
 
-func Wc_AesCbcEncrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) C.int {
-    return C.wc_AesCbcEncrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])), (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz))
+func Wc_AesCbcEncrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
+    return int(C.wc_AesCbcEncrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
+               (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
 }
 
-func Wc_AesCbcDecrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) C.int {
-    return C.wc_AesCbcDecrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])), (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz))
+func Wc_AesCbcDecrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
+    return int(C.wc_AesCbcDecrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
+               (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
 }
 
 /* TODO: Move function below to appropriate .go file */
-func Wc_PBKDF2(out []byte, pwd []byte, pLen int, salt []byte, saltLen int, iter int, kLen int, typeH int) C.int {
-    return C.wc_PBKDF2((*C.uchar)(unsafe.Pointer(&out[0])), (*C.uchar)(unsafe.Pointer(&pwd[0])), C.int(pLen),
-            (*C.uchar)(unsafe.Pointer(&salt[0])), C.int(saltLen), C.int(iter), C.int(kLen), C.int(typeH))
+func Wc_PBKDF2(out []byte, pwd []byte, pLen int, salt []byte, saltLen int, iter int, kLen int, typeH int) int {
+    return int(C.wc_PBKDF2((*C.uchar)(unsafe.Pointer(&out[0])), (*C.uchar)(unsafe.Pointer(&pwd[0])), C.int(pLen),
+               (*C.uchar)(unsafe.Pointer(&salt[0])), C.int(saltLen), C.int(iter), C.int(kLen), C.int(typeH)))
 }
 

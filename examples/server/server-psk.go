@@ -74,6 +74,7 @@ func main() {
     ret := wolfSSL.WolfSSL_CTX_use_psk_identity_hint(ctx, "wolfssl server");
     if ret != wolfSSL.WOLFSSL_SUCCESS {
         fmt.Println(" WolfSSL_CTX_use_psk_identity_hint ", ret);
+        fmt.Println(" Ensure wolfSSL is configured with --enable-psk and you've run ./generateOptions.sh");
         os.Exit(1)
     }
     /* Listen for incoming connections */

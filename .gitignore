@@ -1,5 +1,7 @@
 examples/client/client
+examples/client/client-psk
 examples/server/server
+examples/server/server-psk
 examples/aes-encrypt/aes-encrypt
 examples/ecc-sign-verify/ecc-sign-verify
 examples/hash/fileHash

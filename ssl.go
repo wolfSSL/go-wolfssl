@@ -25,6 +25,14 @@ package wolfSSL
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/ssl.h>
+// #ifdef NO_PSK
+// typedef unsigned int (*pskCb)();
+// int wolfSSL_CTX_use_psk_identity_hint(WOLFSSL_CTX* ctx, const char* hint) {
+//      return -174;
+// }
+// void wolfSSL_CTX_set_psk_server_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
+// void wolfSSL_CTX_set_psk_client_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
+// #endif
 import "C"
 import (
     "unsafe"
@@ -50,6 +58,12 @@ func WolfSSL_CTX_free(ctx *C.struct_WOLFSSL_CTX) {
     C.wolfSSL_CTX_free(ctx)
 }
 
+func WolfSSL_CTX_set_cipher_list(ctx *C.struct_WOLFSSL_CTX, list string) int {
+    c_list := C.CString(list)
+    defer C.free(unsafe.Pointer(c_list))
+    return int(C.wolfSSL_CTX_set_cipher_list(ctx, c_list))
+}
+
 func WolfSSL_new(ctx *C.struct_WOLFSSL_CTX) *C.struct_WOLFSSL {
     return C.wolfSSL_new(ctx)
 }
@@ -72,6 +86,28 @@ func WolfTLSv1_2_server_method() *C.struct_WOLFSSL_METHOD {
 
 func WolfTLSv1_2_client_method() *C.struct_WOLFSSL_METHOD {
     return C.wolfTLSv1_2_client_method()
+}
+
+func WolfTLSv1_3_server_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfTLSv1_3_server_method()
+}
+
+func WolfTLSv1_3_client_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfTLSv1_3_client_method()
+}
+
+func WolfSSL_CTX_set_psk_server_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Pointer) {
+    C.wolfSSL_CTX_set_psk_server_callback(ctx, (*[0]byte)(cb))
+}
+
+func WolfSSL_CTX_set_psk_client_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Pointer) {
+    C.wolfSSL_CTX_set_psk_client_callback(ctx, (*[0]byte)(cb))
+}
+
+func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) int {
+    c_hint := C.CString(hint)
+    defer C.free(unsafe.Pointer(c_hint))
+    return int(C.wolfSSL_CTX_use_psk_identity_hint(ctx, c_hint))
 }
 
 func WolfSSL_CTX_load_verify_locations(ctx *C.struct_WOLFSSL_CTX, cert string,

@@ -32,6 +32,8 @@ package wolfSSL
 // }
 // void wolfSSL_CTX_set_psk_server_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
 // void wolfSSL_CTX_set_psk_client_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
+// void wolfSSL_CTX_set_psk_server_tls13_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
+// void wolfSSL_CTX_set_psk_client_tls13_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
 // #endif
 import "C"
 import (
@@ -104,6 +106,14 @@ func WolfSSL_CTX_set_psk_client_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Po
     C.wolfSSL_CTX_set_psk_client_callback(ctx, (*[0]byte)(cb))
 }
 
+func WolfSSL_CTX_set_psk_server_tls13_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Pointer) {
+    C.wolfSSL_CTX_set_psk_server_tls13_callback(ctx, (*[0]byte)(cb))
+}
+
+func WolfSSL_CTX_set_psk_client_tls13_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Pointer) {
+    C.wolfSSL_CTX_set_psk_client_tls13_callback(ctx, (*[0]byte)(cb))
+}
+
 func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) int {
     c_hint := C.CString(hint)
     defer C.free(unsafe.Pointer(c_hint))
@@ -147,5 +157,25 @@ func WolfSSL_read(ssl *C.struct_WOLFSSL, data []byte, sz uintptr) int {
 
 func WolfSSL_write(ssl *C.struct_WOLFSSL, data []byte, sz uintptr) int {
     return int(C.wolfSSL_write(ssl, unsafe.Pointer(&data[0]), C.int(sz)))
+}
+
+func WolfSSL_get_error(ssl *C.struct_WOLFSSL, ret int) int {
+    return int(C.wolfSSL_get_error(ssl, C.int(ret)))
+}
+
+func WolfSSL_ERR_error_string(ret int, data []byte) string {
+    return C.GoString(C.wolfSSL_ERR_error_string(C.ulong(ret), (*C.char)(unsafe.Pointer(&data[0]))))
+}
+
+func WolfSSL_get_cipher_name(ssl *C.struct_WOLFSSL) string {
+    return C.GoString(C.wolfSSL_get_cipher_name(ssl))
+}
+
+func WolfSSL_get_version(ssl *C.struct_WOLFSSL) string {
+    return C.GoString(C.wolfSSL_get_version(ssl))
+}
+
+func WolfSSL_lib_version() string {
+    return C.GoString(C.wolfSSL_lib_version())
 }
 

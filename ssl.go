@@ -35,6 +35,28 @@ package wolfSSL
 // void wolfSSL_CTX_set_psk_server_tls13_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
 // void wolfSSL_CTX_set_psk_client_tls13_callback(WOLFSSL_CTX* ctx, pskCb cb) {}
 // #endif
+// #ifndef WOLFSSL_DTLS
+// WOLFSSL_METHOD*  wolfDTLSv1_2_server_method(void) {
+//      return NULL;
+// }
+// WOLFSSL_METHOD*  wolfDTLSv1_2_client_method(void) {
+//      return NULL;
+// }
+// void* wolfSSL_dtls_create_peer(int port, char* ip) {
+//      return NULL;
+// }
+// int wolfSSL_dtls_free_peer(void* addr) {
+//      return -174;
+// }
+// #endif
+// #ifndef WOLFSSL_DTLS13
+// WOLFSSL_METHOD*  wolfDTLSv1_3_server_method(void) {
+//      return NULL;
+// }
+// WOLFSSL_METHOD*  wolfDTLSv1_3_client_method(void) {
+//      return NULL;
+// }
+// #endif
 import "C"
 import (
     "unsafe"
@@ -96,6 +118,36 @@ func WolfTLSv1_3_server_method() *C.struct_WOLFSSL_METHOD {
 
 func WolfTLSv1_3_client_method() *C.struct_WOLFSSL_METHOD {
     return C.wolfTLSv1_3_client_method()
+}
+
+func WolfDTLSv1_2_server_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfDTLSv1_2_server_method()
+}
+
+func WolfDTLSv1_2_client_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfDTLSv1_2_client_method()
+}
+
+func WolfDTLSv1_3_server_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfDTLSv1_3_server_method()
+}
+
+func WolfDTLSv1_3_client_method() *C.struct_WOLFSSL_METHOD {
+    return C.wolfDTLSv1_3_client_method()
+}
+
+func WolfSSL_dtls_create_peer(port int, ip string) unsafe.Pointer {
+    c_ip := C.CString(ip)
+    defer C.free(unsafe.Pointer(c_ip))
+    return C.wolfSSL_dtls_create_peer(C.int(port), c_ip)
+}
+
+func WolfSSL_dtls_set_peer(ssl *C.struct_WOLFSSL, addr unsafe.Pointer, peerSz int) int {
+    return int(C.wolfSSL_dtls_set_peer(ssl, addr, C.uint(peerSz)))
+}
+
+func WolfSSL_dtls_free_peer(addr unsafe.Pointer) int {
+    return int(C.wolfSSL_dtls_free_peer(addr))
 }
 
 func WolfSSL_CTX_set_psk_server_callback(ctx *C.struct_WOLFSSL_CTX, cb unsafe.Pointer) {

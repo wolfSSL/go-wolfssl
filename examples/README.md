@@ -1,6 +1,6 @@
 ## Building the TLS Server/Client example
 
-A simple TLS 1.2 server/client demonstration. The example `.go` files are located in the `client` and `server` directories. 
+A simple TLS 1.2 server/client demonstration. The example `.go` files are located in the `client` and `server` directories.
 
 To build the server, run :
 ```
@@ -14,9 +14,23 @@ go build client.go
 
 **NOTE**: Make sure to run both the server and client from within their directories or change the certificate and key paths in the code so that the files are found.
 
+## Building the DTLS Server/Client example
+
+A simple DTLS 1.2 server/client demonstration. The example `.go` files are located in the `client` and `server` directories.
+
+To build the server, run :
+```
+go build server-dtls.go
+```
+
+To build the client, run :
+```
+go build client-dtls.go
+```
+
 ## Building the PSK TLS Server/Client example
 
-A simple TLS 1.3 PSK server/client demonstration. The example `.go` files are located in the `client` and `server` directories. 
+A simple TLS 1.3 PSK server/client demonstration. The example `.go` files are located in the `client` and `server` directories.
 
 To build the server, run :
 ```

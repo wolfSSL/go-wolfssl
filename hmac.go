@@ -1,6 +1,6 @@
-/* random.go
+/* hmac.go
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -22,35 +22,28 @@
 package wolfSSL
 
 // #include <wolfssl/options.h>
-// #include <wolfssl/wolfcrypt/random.h>
-// #ifdef WC_NO_RNG
-// typedef struct WC_RNG {} WC_RNG;
-// int wc_InitRng(WC_RNG* rng) {
-//      return -174;
-// }
-// int wc_FreeRng(WC_RNG* rng) {
-//      return -174;
-// }
-// int wc_RNG_GenerateBlock(WC_RNG* rng, byte* b, word32 sz) {
-//      return -174;
-// }
-// #endif
+// #include <wolfssl/wolfcrypt/hmac.h>
 import "C"
 import (
     "unsafe"
 )
 
-type WC_RNG = C.struct_WC_RNG
+type Hmac = C.struct_Hmac
 
-func Wc_InitRng(rng *C.struct_WC_RNG) int {
-    return int(C.wc_InitRng(rng))
+// PASS IN NILL HERE
+func Wc_HmacInit(hmac *C.struct_Hmac, heap unsafe.Pointer, devId int) int {
+    return int(C.wc_HmacInit(hmac, heap, C.int(devId)))
 }
 
-func Wc_FreeRng(rng *C.struct_WC_RNG) int {
-    return int(C.wc_FreeRng(rng))
+func Wc_HmacSetKey(hmac *C.struct_Hmac, hash int, key []byte, keySz int) int {
+    return int(C.wc_HmacSetKey(hmac, C.int(hash), (*C.uchar)(unsafe.Pointer(&key[0])),
+               C.word32(keySz)))
 }
 
-func Wc_RNG_GenerateBlock(rng *C.struct_WC_RNG, b []byte, sz int) int {
-    return int(C.wc_RNG_GenerateBlock(rng, (*C.uchar)(unsafe.Pointer(&b[0])),
-               C.word32(sz)))
+func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
+    return int(C.wc_HmacUpdate(hmac, (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(inSz)))
+}
+
+func Wc_HmacFinal(hmac *C.struct_Hmac, out []byte) int {
+    return int(C.wc_HmacFinal(hmac, (*C.uchar)(unsafe.Pointer(&out[0]))))
 }

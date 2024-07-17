@@ -21,10 +21,9 @@
 
 package wolfSSL
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/ecc.h>
+// #include <wolfssl/wolfcrypt/curve25519.h>
 // #include <wolfssl/wolfcrypt/random.h>
 // #ifndef HAVE_ECC
 // #define ECC_MAX_SIG_SIZE 1
@@ -77,3 +76,4 @@ func Wc_ecc_verify_hash(sig []byte, sigLen int, hash []byte, hashLen int, res *i
     return int(C.wc_ecc_verify_hash((*C.uchar)(unsafe.Pointer(&sig[0])), C.word32(sigLen),
                (*C.uchar)(unsafe.Pointer(&hash[0])), C.word32(sigLen), (*C.int)(unsafe.Pointer(res)), key))
 }
+

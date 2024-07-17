@@ -21,8 +21,6 @@
 
 package wolfSSL
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hash.h>
 // #ifdef NO_MD5

@@ -46,6 +46,7 @@ package wolfSSL
 //                byte* outPlaintext) {
 //      return -174;
 // }
+// #endif
 // #ifndef HAVE_XCHACHA
 // int wc_XChaCha20Poly1305_Encrypt(
 //    byte *dst, size_t dst_space,
@@ -63,7 +64,6 @@ package wolfSSL
 //    const byte *key, size_t key_len) {
 //      return -174;
 // }
-// #endif
 // #endif
 import "C"
 import (

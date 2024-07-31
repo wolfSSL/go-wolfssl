@@ -24,13 +24,13 @@ package wolfSSL
 func ConstantCompare(a, b []byte, length int) int {
     var result byte = 0
     for i := 0; i < length; i++ {
-            result |= a[i] ^ b[i]
+        result |= a[i] ^ b[i]
     }
 
     if result == 0 {
-            return 1
+        return 1
     } else {
-            return 0
+        return 0
     }
 }
 

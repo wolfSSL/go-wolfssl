@@ -30,18 +30,33 @@ import (
 
 type Hmac = C.struct_Hmac
 
-// PASS IN NILL HERE
 func Wc_HmacInit(hmac *C.struct_Hmac, heap unsafe.Pointer, devId int) int {
     return int(C.wc_HmacInit(hmac, heap, C.int(devId)))
 }
 
+func Wc_HmacFree(hmac *C.struct_Hmac) {
+    C.wc_HmacFree(hmac)
+}
+
 func Wc_HmacSetKey(hmac *C.struct_Hmac, hash int, key []byte, keySz int) int {
-    return int(C.wc_HmacSetKey(hmac, C.int(hash), (*C.uchar)(unsafe.Pointer(&key[0])),
-               C.word32(keySz)))
+    var sanKey *C.uchar
+    if len(key) > 0 {
+        sanKey = (*C.uchar)(unsafe.Pointer(&key[0]))
+    } else {
+        sanKey = (*C.uchar)(unsafe.Pointer(nil))
+    }
+    return int(C.wc_HmacSetKey(hmac, C.int(hash), sanKey, C.word32(keySz)))
 }
 
 func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
-    return int(C.wc_HmacUpdate(hmac, (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(inSz)))
+    var sanIn *C.uchar
+    if len(in) > 0 {
+        sanIn = (*C.uchar)(unsafe.Pointer(&in[0]))
+    } else {
+        sanIn = (*C.uchar)(unsafe.Pointer(nil))
+    }
+
+    return int(C.wc_HmacUpdate(hmac, sanIn, C.word32(inSz)))
 }
 
 func Wc_HmacFinal(hmac *C.struct_Hmac, out []byte) int {

@@ -21,21 +21,19 @@
 
 package wolfSSL
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/random.h>
 // #ifdef WC_NO_RNG
 // typedef struct WC_RNG {} WC_RNG;
 // int wc_InitRng(WC_RNG* rng) {
 //      return -174;
-// } 
+// }
 // int wc_FreeRng(WC_RNG* rng) {
 //      return -174;
-// } 
+// }
 // int wc_RNG_GenerateBlock(WC_RNG* rng, byte* b, word32 sz) {
 //      return -174;
-// } 
+// }
 // #endif
 import "C"
 import (

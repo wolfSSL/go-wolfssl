@@ -21,7 +21,7 @@
 
 package wolfSSL
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
+// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/aes.h>
@@ -58,6 +58,7 @@ import (
     "unsafe"
 )
 
+const AES_IV_SIZE      = int(C.AES_IV_SIZE)
 const AES_BLOCK_SIZE   = int(C.AES_BLOCK_SIZE)
 const AES_128_KEY_SIZE = int(C.AES_128_KEY_SIZE)
 const AES_192_KEY_SIZE = int(C.AES_192_KEY_SIZE)
@@ -91,6 +92,81 @@ func Wc_AesCbcEncrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
 func Wc_AesCbcDecrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
     return int(C.wc_AesCbcDecrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
                (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
+}
+
+func Wc_AesGcmSetKey(aes *C.struct_Aes, key []byte, length int) int {
+    return int(C.wc_AesGcmSetKey(aes, (*C.uchar)(unsafe.Pointer(&key[0])), C.word32(length)))
+}
+
+func Wc_AesGcmEncrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, outAuthTag, inAAD []byte) int {
+    var sanInAAD *C.uchar
+    if len(inAAD) > 0 {
+        sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
+    } else {
+        sanInAAD = (*C.uchar)(unsafe.Pointer(nil))
+    }
+    var sanInPlain *C.uchar
+    if len(inPlain) > 0 {
+        sanInPlain = (*C.uchar)(unsafe.Pointer(&inPlain[0]))
+    } else {
+        emptyStringArray := []byte("")
+        sanInPlain = (*C.uchar)(unsafe.Pointer(&emptyStringArray))
+    }
+    var sanOutCipher *C.uchar
+    if len(outCipher) > 0 {
+        sanOutCipher = (*C.uchar)(unsafe.Pointer(&outCipher[0]))
+    } else {
+        outCipher = make([]byte, AES_BLOCK_SIZE)
+        sanOutCipher = (*C.uchar)(unsafe.Pointer(&outCipher[0]))
+    }
+    ret := int(C.wc_AesGcmEncrypt(aes, sanOutCipher, sanInPlain, C.word32(len(inPlain)),
+               (*C.uchar)(unsafe.Pointer(&inIv[0])), C.word32(len(inIv)),
+               (*C.uchar)(unsafe.Pointer(&outAuthTag[0])), C.word32(len(outAuthTag)), sanInAAD, C.word32(len(inAAD))))
+    return ret
+}
+
+func Wc_AesGcmDecrypt(aes *C.struct_Aes, outPlain, inCipher, inIv, inAuthTag, inAAD []byte) int {
+    var sanInAAD *C.uchar
+    if len(inAAD) > 0 {
+        sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
+    } else {
+        sanInAAD = (*C.uchar)(unsafe.Pointer(nil))
+    }
+    var sanInCipher *C.uchar
+    if len(inCipher) > 0 {
+        sanInCipher = (*C.uchar)(unsafe.Pointer(&inCipher[0]))
+    } else {
+        emptyStringArray := []byte("")
+        sanInCipher = (*C.uchar)(unsafe.Pointer(&emptyStringArray))
+    }
+
+    ret := int(C.wc_AesGcmDecrypt(aes, (*C.uchar)(unsafe.Pointer(&outPlain[0])), sanInCipher, C.word32(len(inCipher)),
+               (*C.uchar)(unsafe.Pointer(&inIv[0])), C.word32(len(inIv)),
+               (*C.uchar)(unsafe.Pointer(&inAuthTag[0])), C.word32(len(inAuthTag)), sanInAAD, C.word32(len(inAAD))))
+    return ret
+
+}
+
+func Wc_AesGcm_Appended_Tag_Encrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, inAAD []byte) ([]byte, int) {
+    var outAuthTag [AES_BLOCK_SIZE]byte
+    var longOutCipher []byte
+
+    if len(outCipher) < (len(inPlain) + AES_BLOCK_SIZE) {
+        longOutCipher = make([]byte, len(inPlain) + AES_BLOCK_SIZE)
+    } else {
+        longOutCipher = outCipher
+    }
+
+    ret := Wc_AesGcmEncrypt(aes, longOutCipher[:(len(longOutCipher)-AES_BLOCK_SIZE)], inPlain, inIv, outAuthTag[:], inAAD)
+    copy(longOutCipher[(len(longOutCipher)-AES_BLOCK_SIZE):], outAuthTag[:])
+    return longOutCipher, ret
+}
+
+func Wc_AesGcm_Appended_Tag_Decrypt(aes *C.struct_Aes, outPlain, inCipher, inIv, inAAD []byte) int {
+    var inAuthTag [AES_BLOCK_SIZE]byte
+    copy(inAuthTag[:], inCipher[(len(inCipher)-AES_BLOCK_SIZE):])
+    ret := Wc_AesGcmDecrypt(aes, outPlain, inCipher[:(len(inCipher)-AES_BLOCK_SIZE)], inIv, inAuthTag[:], inAAD)
+    return ret
 }
 
 /* TODO: Move function below to appropriate .go file */

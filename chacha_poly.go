@@ -93,8 +93,8 @@ func Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, outCipher, outAuth
     if len(outCipher) > 0 {
         sanOutCipher = (*C.uchar)(unsafe.Pointer(&outCipher[0]))
     } else {
-        outCipher = make([]byte, CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
-        sanOutCipher = (*C.uchar)(unsafe.Pointer(&outCipher[0]))
+        emptyStringArray := []byte("")
+        sanOutCipher = (*C.uchar)(unsafe.Pointer(&emptyStringArray))
     }
     return int(C.wc_ChaCha20Poly1305_Encrypt((*C.uchar)(unsafe.Pointer(&inKey[0])), (*C.uchar)(unsafe.Pointer(&inIv[0])),
                sanInAAD, C.word32(len(inAAD)), sanInPlain, C.word32(len(inPlain)),
@@ -112,8 +112,8 @@ func Wc_ChaCha20Poly1305_Decrypt(inKey, inIv, inAAD, inCipher, inAuthTag , outPl
     if len(inCipher) > 0 {
         sanInCipher = (*C.uchar)(unsafe.Pointer(&inCipher[0]))
     } else {
-        inCipher = make([]byte, CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
-        sanInCipher = (*C.uchar)(unsafe.Pointer(&inCipher[0]))
+        emptyStringArray := []byte("")
+        sanInCipher = (*C.uchar)(unsafe.Pointer(&emptyStringArray))
     }
 
     return int(C.wc_ChaCha20Poly1305_Decrypt((*C.uchar)(unsafe.Pointer(&inKey[0])), (*C.uchar)(unsafe.Pointer(&inIv[0])),

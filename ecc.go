@@ -23,7 +23,7 @@ package wolfSSL
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/ecc.h>
-// #include <wolfssl/wolfcrypt/curve25519.h>
+// #include <wolfssl/wolfcrypt/asn_public.h>
 // #include <wolfssl/wolfcrypt/random.h>
 // #ifndef HAVE_ECC
 // #define ECC_MAX_SIG_SIZE 1
@@ -54,6 +54,9 @@ import (
 const ECC_MAX_SIG_SIZE = int(C.ECC_MAX_SIG_SIZE)
 
 type Ecc_key = C.struct_ecc_key
+type Ecc_point = C.struct_ecc_point
+
+const ECC_SECP256R1 = int(C.ECC_SECP256R1)
 
 func Wc_ecc_init(key *C.struct_ecc_key) int {
     return int(C.wc_ecc_init(key))
@@ -67,6 +70,43 @@ func Wc_ecc_make_key(rng *C.struct_WC_RNG, keySize int, key *C.struct_ecc_key) i
     return int(C.wc_ecc_make_key(rng, C.int(keySize), key))
 }
 
+func Wc_ecc_make_pub(key *C.struct_ecc_key, point *C.struct_ecc_point) int {
+    return int(C.wc_ecc_make_pub(key, point))
+}
+
+func Wc_ecc_set_rng(key *C.struct_ecc_key, rng *C.struct_WC_RNG) int {
+    return int(C.wc_ecc_set_rng(key, rng))
+}
+
+func Wc_ecc_export_private_only(key *C.struct_ecc_key, out []byte, outLen *int) int {
+    cOutLen := C.word32(*outLen)
+    ret := int(C.wc_ecc_export_private_only(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen))
+    *outLen = int(cOutLen)
+    return ret
+}
+
+func Wc_ecc_export_x963_ex(key *C.struct_ecc_key, out []byte, outLen *int, compressed int) int {
+    cOutLen := C.word32(*outLen)
+    ret := int(C.wc_ecc_export_x963_ex(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen, C.int(compressed)))
+    *outLen = int(cOutLen)
+    return ret
+}
+
+func Wc_ecc_import_private_key_ex(priv []byte, privSz int, pub []byte, pubSz int, key *C.struct_ecc_key, curveId int) int {
+    privPtr := (*C.byte)(unsafe.Pointer(&priv[0]))
+    var pubPtr *C.byte
+
+    if pubSz > 0 {
+        pubPtr = (*C.byte)(unsafe.Pointer(&pub[0]))
+    }
+
+    return int(C.wc_ecc_import_private_key_ex(privPtr, C.word32(privSz), pubPtr, C.word32(pubSz), key, C.int(curveId)))
+}
+
+func Wc_ecc_import_x963_ex(pubKey []byte, pubSz int, key *C.struct_ecc_key, curveID int) int {
+	return int(C.wc_ecc_import_x963_ex((*C.uchar)(unsafe.Pointer(&pubKey[0])), C.word32(pubSz), key, C.int(curveID)))
+}
+
 func Wc_ecc_sign_hash(in []byte, inLen int, out []byte, outLen *int, rng *C.struct_WC_RNG, key *C.struct_ecc_key) int {
     return int(C.wc_ecc_sign_hash((*C.uchar)(unsafe.Pointer(&in[0])), C.word32(inLen),
                (*C.uchar)(unsafe.Pointer(&out[0])), (*C.word32)(unsafe.Pointer(outLen)), rng, key))
@@ -77,3 +117,9 @@ func Wc_ecc_verify_hash(sig []byte, sigLen int, hash []byte, hashLen int, res *i
                (*C.uchar)(unsafe.Pointer(&hash[0])), C.word32(sigLen), (*C.int)(unsafe.Pointer(res)), key))
 }
 
+func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen *int) int {
+    cOutLen := C.word32(*outLen)
+    ret := int(C.wc_ecc_shared_secret(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
+    *outLen = int(cOutLen)
+    return ret
+}

@@ -14,34 +14,24 @@ make
 sudo make install
 ``` 
 
-Then run the command below to build and install the wrapper module.
+Then clone the go-wolfssl repo and run the `./generateOptions.sh` script to customize go-wolfssl to the same feature set as wolfSSL. This script will generate an `options.go` file that will keep go-wolfssl and wolfSSL in sync. `generateOptions` should be run any time you change your wolfSSL configure options. If the path to your wolfSSL directory is `../wolfssl`, just run: 
 ```
-go get -u github.com/wolfssl/go-wolfssl 
-```
-
-## Building with configure options
-
-If building wolfSSL with a non-empty configure, you'll have to run the `./generateOptions.sh` executable to customize go-wolfssl to the same feature set as wolfSSL. This executable will generate an `options.go` file that will keep go-wolfssl and wolfSSL in sync. `generateOptions` should be run any time you change your wolfSSL configure options. 
-
-Example: To use go-wolfssl without ECC, first build wolfSSL as shown below:
-```
-./configure --disable-ecc
-make
-sudo make install
+git clone https://github.com/wolfSSL/go-wolfssl
+cd go-wolfssl
+./generateOptions.sh
 ``` 
 
-Then go to the go-wolfssl directory and if the path to your wolfSSL directory is `../wolfssl`, just run:
-```
-./generateOptions.sh
-```
-
-If you have a different path to your wolfSSL directory, run the executable with the right path:
+If you have a different path to your wolfSSL directory, run the script with the right path:
 ```
 ./generateOptions ../files/wolfSSL
 ``` 
 
-options.go is now generated and go-wolfssl can be run with ECC disabled!
- 
+To install the wrapper module, run these commands:
+```
+go get -u github.com/wolfssl/go-wolfssl 
+go mod edit -replace github.com/wolfssl/go-wolfssl=<path to your go-wolfssl directory>
+```
+
 ## Running the TLS Server/Client example
 
 The example `.go` files are located in the `client` and `server` directories. 

@@ -54,7 +54,6 @@ import (
 const ECC_MAX_SIG_SIZE = int(C.ECC_MAX_SIG_SIZE)
 
 type Ecc_key = C.struct_ecc_key
-type Ecc_point = C.struct_ecc_point
 
 const ECC_SECP256R1 = int(C.ECC_SECP256R1)
 
@@ -70,8 +69,8 @@ func Wc_ecc_make_key(rng *C.struct_WC_RNG, keySize int, key *C.struct_ecc_key) i
     return int(C.wc_ecc_make_key(rng, C.int(keySize), key))
 }
 
-func Wc_ecc_make_pub(key *C.struct_ecc_key, point *C.struct_ecc_point) int {
-    return int(C.wc_ecc_make_pub(key, point))
+func Wc_ecc_make_pub_in_priv(key *C.struct_ecc_key) int {
+    return int(C.wc_ecc_make_pub(key, nil))
 }
 
 func Wc_ecc_set_rng(key *C.struct_ecc_key, rng *C.struct_WC_RNG) int {

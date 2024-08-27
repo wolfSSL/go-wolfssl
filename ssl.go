@@ -229,3 +229,10 @@ func WolfSSL_lib_version() string {
     return C.GoString(C.wolfSSL_lib_version())
 }
 
+func WolfSSL_Debugging_ON() {
+    C.wolfSSL_Debugging_ON()
+}
+
+func WolfSSL_Debugging_OFF() {
+    C.wolfSSL_Debugging_OFF()
+}

@@ -63,6 +63,8 @@ import (
 const SSL_FILETYPE_PEM = 1
 const WOLFSSL_SUCCESS  = 1
 
+type WOLFSSL = C.struct_WOLFSSL
+type WOLFSSL_CTX = C.struct_WOLFSSL_CTX
 
 func WolfSSL_Init() {
     C.wolfSSL_Init()

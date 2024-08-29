@@ -55,6 +55,11 @@ package wolfSSL
 //      return NULL;
 // }
 // #endif
+// #ifndef HAVE_WRITE_DUP
+// WOLFSSL* wolfSSL_write_dup(WOLFSSL* ssl) {
+//      return NULL;
+// }
+// #endif
 import "C"
 import (
     "unsafe"
@@ -90,6 +95,10 @@ func WolfSSL_CTX_set_cipher_list(ctx *C.struct_WOLFSSL_CTX, list string) int {
 
 func WolfSSL_new(ctx *C.struct_WOLFSSL_CTX) *C.struct_WOLFSSL {
     return C.wolfSSL_new(ctx)
+}
+
+func WolfSSL_write_dup(ssl *C.struct_WOLFSSL) *C.struct_WOLFSSL {
+    return C.wolfSSL_write_dup(ssl)
 }
 
 func WolfSSL_connect(ssl *C.struct_WOLFSSL) int {

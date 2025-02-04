@@ -62,3 +62,12 @@ func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
 func Wc_HmacFinal(hmac *C.struct_Hmac, out []byte) int {
     return int(C.wc_HmacFinal(hmac, (*C.uchar)(unsafe.Pointer(&out[0]))))
 }
+
+func Wc_HKDF(hashType int, inputKey []byte, inputKeySz int, salt []byte,
+             saltSz int, info []byte, infoSz int, out []byte, outSz int) int {
+    return int(C.wc_HKDF(C.int(hashType), (*C.uchar)(unsafe.Pointer(&inputKey[0])),
+               C.word32(inputKeySz), (*C.uchar)(unsafe.Pointer(&salt[0])),
+               C.word32(saltSz), (*C.uchar)(unsafe.Pointer(&info[0])),
+               C.word32(infoSz), (*C.uchar)(unsafe.Pointer(&out[0])),
+               C.word32(outSz)))
+}

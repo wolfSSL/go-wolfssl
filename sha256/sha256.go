@@ -3,6 +3,7 @@ package sha256
 import (
 	"hash"
 	wolfSSL "github.com/wolfssl/go-wolfssl"
+	"github.com/wolfssl/go-wolfssl/internal/binding"
 )
 
 // Size of a SHA256 checksum in bytes.

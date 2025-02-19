@@ -3,6 +3,7 @@ package ecc
 import (
 	"fmt"
 	wolfSSL "github.com/wolfssl/go-wolfssl"
+	"github.com/wolfssl/go-wolfssl/internal/binding"
 )
 
 // GenerateKey generates a new SECP256R1 key pair

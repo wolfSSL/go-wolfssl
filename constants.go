@@ -1,4 +1,4 @@
-package wolfssl
+package wolfSSL
 
 const (
 	// WC_ECC_P256_PRIVATE_KEY_SIZE is the size of a SECP256R1 private key in bytes

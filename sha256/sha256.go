@@ -19,18 +19,18 @@ type digest struct {
 // New returns a new hash.Hash computing the SHA256 checksum.
 func New() hash.Hash {
 	d := new(digest)
-	wolfSSL.Wc_Sha256_Init(&d.hash)
+	binding.Wc_Sha256_Init(&d.hash)
 	return d
 }
 
 // Reset resets the Hash to its initial state.
 func (d *digest) Reset() {
-	wolfSSL.Wc_Sha256_Init(&d.hash)
+	binding.Wc_Sha256_Init(&d.hash)
 }
 
 // Write adds more data to the running hash.
 func (d *digest) Write(p []byte) (n int, err error) {
-	if ret := wolfSSL.Wc_Sha256_Update(&d.hash, p, len(p)); ret != 0 {
+	if ret := binding.Wc_Sha256_Update(&d.hash, p, len(p)); ret != 0 {
 		return 0, nil
 	}
 	return len(p), nil
@@ -40,7 +40,7 @@ func (d *digest) Write(p []byte) (n int, err error) {
 func (d *digest) Sum(b []byte) []byte {
 	var hash [Size]byte
 	d2 := *d
-	wolfSSL.Wc_Sha256_Final(&d2.hash, hash[:])
+	binding.Wc_Sha256_Final(&d2.hash, hash[:])
 	return append(b, hash[:]...)
 }
 
@@ -53,7 +53,7 @@ func (d *digest) BlockSize() int { return BlockSize }
 // Sum256 returns the SHA256 checksum of the data.
 func Sum256(data []byte) [Size]byte {
 	var d digest
-	wolfSSL.Wc_Sha256_Init(&d.hash)
+	binding.Wc_Sha256_Init(&d.hash)
 	wolfSSL.Wc_Sha256_Update(&d.hash, data, len(data))
 	var out [Size]byte
 	wolfSSL.Wc_Sha256_Final(&d.hash, out[:])

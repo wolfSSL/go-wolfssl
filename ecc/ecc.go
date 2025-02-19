@@ -1,6 +1,7 @@
 package ecc
 
 import (
+	"fmt"
 	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 

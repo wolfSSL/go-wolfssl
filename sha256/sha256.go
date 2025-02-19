@@ -54,8 +54,8 @@ func (d *digest) BlockSize() int { return BlockSize }
 func Sum256(data []byte) [Size]byte {
 	var d digest
 	binding.Wc_Sha256_Init(&d.hash)
-	wolfSSL.Wc_Sha256_Update(&d.hash, data, len(data))
+	binding.Wc_Sha256_Update(&d.hash, data, len(data))
 	var out [Size]byte
-	wolfSSL.Wc_Sha256_Final(&d.hash, out[:])
+	binding.Wc_Sha256_Final(&d.hash, out[:])
 	return out
 }

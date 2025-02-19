@@ -46,7 +46,7 @@ func ImportPrivate(curve int, priv []byte) (*wolfSSL.WC_ECC_KEY, error) {
 		return nil, fmt.Errorf("failed to initialize ECC key")
 	}
 
-	if ret := wolfSSL.Wc_ecc_import_private_key_ex(priv, len(priv), nil, 0, &key, curve); ret != 0 {
+	if ret := binding.Wc_ecc_import_private_key_ex(priv, len(priv), nil, 0, &key, curve); ret != 0 {
 		binding.Wc_ecc_free(&key)
 		return nil, fmt.Errorf("failed to import private key")
 	}
@@ -61,7 +61,7 @@ func ImportPublic(curve int, pub []byte) (*wolfSSL.WC_ECC_KEY, error) {
 		return nil, fmt.Errorf("failed to initialize ECC key")
 	}
 
-	if ret := wolfSSL.Wc_ecc_import_x963_ex(pub, len(pub), &key, curve); ret != 0 {
+	if ret := binding.Wc_ecc_import_x963_ex(pub, len(pub), &key, curve); ret != 0 {
 		binding.Wc_ecc_free(&key)
 		return nil, fmt.Errorf("failed to import public key")
 	}
@@ -73,7 +73,7 @@ func ImportPublic(curve int, pub []byte) (*wolfSSL.WC_ECC_KEY, error) {
 func ExportPublicFromPrivate(key *wolfSSL.WC_ECC_KEY) ([]byte, error) {
 	pub := make([]byte, wolfSSL.WC_ECC_P256_PUBLIC_KEY_SIZE)
 	pubSz := wolfSSL.WC_ECC_P256_PUBLIC_KEY_SIZE
-	if ret := wolfSSL.Wc_ecc_export_x963(key, pub, &pubSz); ret != 0 {
+	if ret := binding.Wc_ecc_export_x963(key, pub, &pubSz); ret != 0 {
 		return nil, fmt.Errorf("failed to export public key")
 	}
 

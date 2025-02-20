@@ -19,7 +19,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
  */
 
-package wolfSSL
+package wolfssl
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hmac.h>

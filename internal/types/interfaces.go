@@ -1,7 +1,6 @@
 package types
 
 import (
-	"crypto/cipher"
 	"hash"
 	"io"
 )

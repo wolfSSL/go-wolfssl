@@ -1,7 +1,7 @@
 // Package internal provides low-level bindings to wolfSSL C functions
 package internal
 
-// #cgo CFLAGS: -I${SRCDIR}/../../../../include
+// #cgo CFLAGS: -I${SRCDIR}/../../../../include -DHAVE_AES_GCM
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/settings.h>
@@ -11,6 +11,10 @@ package internal
 // #include <wolfssl/wolfcrypt/wc_port.h>
 import "C"
 import "unsafe"
+
+const (
+    WC_AES_GCM_AUTH_SZ = 16
+)
 
 // AesGcmEncrypt encrypts data using AES-GCM
 func AesGcmEncrypt(key, nonce, aad, plaintext []byte) ([]byte, error) {

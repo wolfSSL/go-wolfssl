@@ -1,4 +1,4 @@
-package wolfssl
+package wolfSSL
 
 import (
 	"hash"

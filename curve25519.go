@@ -19,7 +19,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
  */
 
-package wolfssl
+package wolfSSL
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/curve25519.h>

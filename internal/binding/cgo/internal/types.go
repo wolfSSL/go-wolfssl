@@ -2,7 +2,7 @@
 package internal
 
 // #cgo CFLAGS: -I${SRCDIR}/../../../../include
-// #cgo LDFLAGS: -L${SRCDIR}/../../../../lib -lwolfssl
+// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/settings.h>
 // #include <wolfssl/wolfcrypt/ecc.h>

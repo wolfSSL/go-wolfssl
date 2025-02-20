@@ -50,11 +50,4 @@ var (
     // HMAC functions
     HmacSha256 = cgo.HmacSha256
     NewHMAC = cgo.NewHMAC
-
-    // Random functions
-    RandomRead = cgo.RandomRead
-    Int = cgo.Int
-
-    // HKDF functions
-    HKDF = cgo.HKDF
 )

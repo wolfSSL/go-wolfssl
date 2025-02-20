@@ -2,6 +2,7 @@
 package internal
 
 // #cgo CFLAGS: -I${SRCDIR}/../../../../include
+// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/sha256.h>
 import "C"

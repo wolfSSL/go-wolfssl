@@ -50,11 +50,4 @@ var (
     // HMAC functions
     HmacSha256 = internal.HmacSha256
     NewHMAC = internal.NewHMAC
-
-    // Random functions
-    RandomRead = internal.RandomRead
-    Int = internal.Int
-
-    // HKDF functions
-    HKDF = internal.HKDF
 )

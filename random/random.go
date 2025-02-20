@@ -6,11 +6,13 @@ import (
 	"github.com/wolfssl/go-wolfssl/internal/types"
 )
 
+// reader implements io.Reader for FIPS-compliant random number generation
+type reader struct{}
+
 // Reader is a FIPS-compliant replacement for crypto/rand.Reader
 var Reader io.Reader = &reader{}
 
-type reader struct{}
-
+// Read implements io.Reader interface
 func (r *reader) Read(b []byte) (n int, err error) {
 	rng := new(types.WC_RNG)
 	if ret := types.Wc_InitRng(rng); ret != 0 {

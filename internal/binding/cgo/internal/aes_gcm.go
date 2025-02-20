@@ -4,7 +4,9 @@ package internal
 // #cgo CFLAGS: -I${SRCDIR}/../../../../include
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
 // #include <wolfssl/options.h>
+// #include <wolfssl/wolfcrypt/settings.h>
 // #include <wolfssl/wolfcrypt/aes.h>
+// #include <wolfssl/wolfcrypt/error-crypt.h>
 import "C"
 import "unsafe"
 
@@ -23,6 +25,7 @@ func AesGcmEncrypt(key, nonce, aad, plaintext []byte) ([]byte, error) {
     }
 
     ciphertext := make([]byte, len(plaintext)+WC_AES_GCM_AUTH_SZ)
+    var outLen C.word32
 
     ret = C.wc_AesGcmEncrypt(&aes,
         (*C.byte)(unsafe.Pointer(&ciphertext[0])),

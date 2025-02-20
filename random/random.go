@@ -2,31 +2,24 @@ package random
 
 import (
 	"fmt"
-	wolfSSL "github.com/wolfssl/go-wolfssl"
+	"io"
+	"github.com/wolfssl/go-wolfssl/internal/types"
 )
 
-type Reader struct {
-	rng wolfSSL.WC_RNG
-}
+// Reader is a FIPS-compliant replacement for crypto/rand.Reader
+var Reader io.Reader = &reader{}
 
-func NewReader() (*Reader, error) {
-	var r Reader
-	if ret := wolfSSL.Wc_InitRng(&r.rng); ret != 0 {
-		return nil, fmt.Errorf("failed to initialize RNG")
-	}
-	return &r, nil
-}
+type reader struct{}
 
-func (r *Reader) Read(p []byte) (n int, err error) {
-	if ret := wolfSSL.Wc_RNG_GenerateBlock(&r.rng, p, len(p)); ret != 0 {
-		return 0, fmt.Errorf("failed to generate random bytes")
+func (r *reader) Read(b []byte) (n int, err error) {
+	rng := new(types.WC_RNG)
+	if ret := types.Wc_InitRng(rng); ret != 0 {
+		return 0, fmt.Errorf("failed to initialize RNG: %d", ret)
 	}
-	return len(p), nil
-}
+	defer types.Wc_FreeRng(rng)
 
-func (r *Reader) Close() error {
-	if ret := wolfSSL.Wc_FreeRng(&r.rng); ret != 0 {
-		return fmt.Errorf("failed to free RNG: %d", ret)
+	if ret := types.Wc_RNG_GenerateBlock(rng, b, len(b)); ret != 0 {
+		return 0, fmt.Errorf("failed to generate random bytes: %d", ret)
 	}
-	return nil
+	return len(b), nil
 }

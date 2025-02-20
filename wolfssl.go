@@ -1,16 +1,22 @@
+// Package wolfSSL provides FIPS-compliant cryptographic operations
+// Package wolfSSL provides FIPS-compliant cryptographic operations
 package wolfSSL
 
 import (
 	"hash"
 	"io"
 
-	"github.com/wolfssl/go-wolfssl/aes"
-	"github.com/wolfssl/go-wolfssl/ecc"
+	"github.com/wolfssl/go-wolfssl/internal/binding"
+	"github.com/wolfssl/go-wolfssl/internal/binding/aes"
+	"github.com/wolfssl/go-wolfssl/internal/binding/ecc"
+	"github.com/wolfssl/go-wolfssl/internal/binding/kdf"
+	"github.com/wolfssl/go-wolfssl/internal/binding/random"
+	"github.com/wolfssl/go-wolfssl/internal/binding/sha256"
 	"github.com/wolfssl/go-wolfssl/internal/types"
-	"github.com/wolfssl/go-wolfssl/kdf"
-	"github.com/wolfssl/go-wolfssl/random"
-	"github.com/wolfssl/go-wolfssl/sha256"
 )
+
+// Re-export types from internal/binding
+type Error = binding.WolfSSLError
 
 // Re-export constants from internal/types
 const (
@@ -36,20 +42,20 @@ var Random = struct {
 
 // ECC provides FIPS-compliant elliptic curve cryptography
 var ECC = struct {
-	GenerateKey            func(curve int, rng []byte) ([]byte, []byte, error)
+	GenerateKey            func(curve int) (*ecc.Key, error)
 	Sign                   func(priv *ecc.Key, message []byte) ([]byte, error)
 	Verify                 func(pub []byte, message []byte, sig []byte) bool
 	ImportPrivate          func(curve int, data []byte) (*ecc.Key, error)
 	ImportPublic           func(curve int, data []byte) (*ecc.Key, error)
-	SharedSecret           func(priv *ecc.Key, pub []byte) ([]byte, error)
+	ImportPublicFromPrivate func(priv *ecc.Key) (*ecc.Key, error)
 	ExportPublicFromPrivate func(priv *ecc.Key) ([]byte, error)
 }{
 	GenerateKey:            ecc.GenerateKey,
-	Sign:                   ecc.Sign,
-	Verify:                 ecc.Verify,
+	Sign:                   func(priv *ecc.Key, message []byte) ([]byte, error) { return priv.Sign(message) },
+	Verify:                 func(pub []byte, message []byte, sig []byte) bool { return (&ecc.Key{Pub: pub}).Verify(message, sig) },
 	ImportPrivate:          ecc.ImportPrivate,
 	ImportPublic:           ecc.ImportPublic,
-	SharedSecret:           ecc.SharedSecret,
+	ImportPublicFromPrivate: ecc.ImportPublicFromPrivate,
 	ExportPublicFromPrivate: ecc.ExportPublicFromPrivate,
 }
 

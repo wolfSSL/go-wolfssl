@@ -1,6 +1,6 @@
-/* random.go
+/* sha.go
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -22,35 +22,33 @@
 package wolfSSL
 
 // #include <wolfssl/options.h>
-// #include <wolfssl/wolfcrypt/random.h>
-// #ifdef WC_NO_RNG
-// typedef struct WC_RNG {} WC_RNG;
-// int wc_InitRng(WC_RNG* rng) {
-//      return -174;
-// }
-// int wc_FreeRng(WC_RNG* rng) {
-//      return -174;
-// }
-// int wc_RNG_GenerateBlock(WC_RNG* rng, byte* b, word32 sz) {
-//      return -174;
-// }
-// #endif
+// #include <wolfssl/wolfcrypt/sha256.h>
 import "C"
 import (
     "unsafe"
 )
 
-type WC_RNG = C.struct_WC_RNG
+type Wc_Sha256 = C.struct_wc_Sha256
 
-func Wc_InitRng(rng *C.struct_WC_RNG) int {
-    return int(C.wc_InitRng(rng))
+func Wc_InitSha256_ex(sha *C.struct_wc_Sha256, heap unsafe.Pointer, devId int) int {
+    return int(C.wc_InitSha256_ex(sha, heap, C.int(devId)))
 }
 
-func Wc_FreeRng(rng *C.struct_WC_RNG) int {
-    return int(C.wc_FreeRng(rng))
+func Wc_Sha256Free(sha *C.struct_wc_Sha256) {
+    C.wc_Sha256Free(sha)
 }
 
-func Wc_RNG_GenerateBlock(rng *C.struct_WC_RNG, b []byte, sz int) int {
-    return int(C.wc_RNG_GenerateBlock(rng, (*C.uchar)(unsafe.Pointer(&b[0])),
-               C.word32(sz)))
+func Wc_Sha256Update(sha *C.struct_wc_Sha256, in []byte, inSz int) int {
+    var sanIn *C.uchar
+    if len(in) > 0 {
+        sanIn = (*C.uchar)(unsafe.Pointer(&in[0]))
+    } else {
+        sanIn = (*C.uchar)(unsafe.Pointer(nil))
+    }
+
+    return int(C.wc_Sha256Update(sha, sanIn, C.word32(inSz)))
+}
+
+func Wc_Sha256Final(sha *C.struct_wc_Sha256, out []byte) int {
+    return int(C.wc_Sha256Final(sha, (*C.uchar)(unsafe.Pointer(&out[0]))))
 }

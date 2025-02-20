@@ -3,7 +3,7 @@ package aes
 import (
 	"crypto/cipher"
 	"errors"
-	wolfSSL "github.com/wolfssl/go-wolfssl"
+	"github.com/wolfssl/go-wolfssl/internal/types"
 )
 
 // NewGCM returns a new AES-GCM AEAD

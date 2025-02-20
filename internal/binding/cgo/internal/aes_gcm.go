@@ -24,8 +24,8 @@ func AesGcmEncrypt(key, nonce, aad, plaintext []byte) ([]byte, error) {
         return nil, WolfSSLError(ret)
     }
 
-    ciphertext := make([]byte, len(plaintext)+WC_AES_GCM_AUTH_SZ)
-    var outLen C.word32
+    ciphertext := make([]byte, len(plaintext))
+    authTag := make([]byte, WC_AES_GCM_AUTH_SZ)
 
     ret = C.wc_AesGcmEncrypt(&aes,
         (*C.byte)(unsafe.Pointer(&ciphertext[0])),
@@ -33,16 +33,21 @@ func AesGcmEncrypt(key, nonce, aad, plaintext []byte) ([]byte, error) {
         C.word32(len(plaintext)),
         (*C.byte)(unsafe.Pointer(&nonce[0])),
         C.word32(len(nonce)),
+        (*C.byte)(unsafe.Pointer(&authTag[0])),
+        C.word32(WC_AES_GCM_AUTH_SZ),
         (*C.byte)(unsafe.Pointer(&aad[0])),
-        C.word32(len(aad)),
-        (*C.byte)(unsafe.Pointer(&ciphertext[len(plaintext)])),
-        C.word32(WC_AES_GCM_AUTH_SZ))
+        C.word32(len(aad)))
 
     if ret != 0 {
         return nil, WolfSSLError(ret)
     }
 
-    return ciphertext, nil
+    // Combine ciphertext and auth tag
+    result := make([]byte, len(ciphertext)+len(authTag))
+    copy(result, ciphertext)
+    copy(result[len(ciphertext):], authTag)
+
+    return result, nil
 }
 
 // AesGcmDecrypt decrypts data using AES-GCM
@@ -63,13 +68,16 @@ func AesGcmDecrypt(key, nonce, aad, ciphertext []byte) ([]byte, error) {
         return nil, WolfSSLError(ret)
     }
 
-    plaintext := make([]byte, len(ciphertext)-WC_AES_GCM_AUTH_SZ)
+    // Split ciphertext and auth tag
+    actualCiphertext := ciphertext[:len(ciphertext)-WC_AES_GCM_AUTH_SZ]
     authTag := ciphertext[len(ciphertext)-WC_AES_GCM_AUTH_SZ:]
+
+    plaintext := make([]byte, len(actualCiphertext))
 
     ret = C.wc_AesGcmDecrypt(&aes,
         (*C.byte)(unsafe.Pointer(&plaintext[0])),
-        (*C.byte)(unsafe.Pointer(&ciphertext[0])),
-        C.word32(len(plaintext)),
+        (*C.byte)(unsafe.Pointer(&actualCiphertext[0])),
+        C.word32(len(actualCiphertext)),
         (*C.byte)(unsafe.Pointer(&nonce[0])),
         C.word32(len(nonce)),
         (*C.byte)(unsafe.Pointer(&authTag[0])),

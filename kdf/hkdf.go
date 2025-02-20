@@ -3,8 +3,7 @@ package kdf
 import (
 	"crypto/hmac"
 	"errors"
-	"io"
-
+	"github.com/wolfssl/go-wolfssl/internal/types"
 	"github.com/wolfssl/go-wolfssl/sha256"
 )
 
@@ -12,7 +11,7 @@ import (
 func HKDF(secret, salt, info []byte, outLen int) ([]byte, error) {
 	// Extract phase
 	if salt == nil {
-		salt = make([]byte, sha256.Size)
+		salt = make([]byte, types.WC_SHA256_DIGEST_SIZE)
 	}
 	extractor := hmac.New(sha256.New, salt)
 	extractor.Write(secret)
@@ -39,7 +38,7 @@ func HKDF(secret, salt, info []byte, outLen int) ([]byte, error) {
 // Extract takes input keying material and salt, and returns a pseudorandom key
 func Extract(salt, secret []byte) []byte {
 	if salt == nil {
-		salt = make([]byte, sha256.Size)
+		salt = make([]byte, types.WC_SHA256_DIGEST_SIZE)
 	}
 	extractor := hmac.New(sha256.New, salt)
 	extractor.Write(secret)
@@ -48,7 +47,7 @@ func Extract(salt, secret []byte) []byte {
 
 // Expand takes a pseudorandom key and info string and generates output keying material
 func Expand(prk []byte, info []byte, length int) ([]byte, error) {
-	if length > 255*sha256.Size {
+	if length > 255*types.WC_SHA256_DIGEST_SIZE {
 		return nil, errors.New("requested output too long")
 	}
 

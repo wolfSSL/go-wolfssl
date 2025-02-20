@@ -28,16 +28,7 @@ const (
 )
 
 // Random provides FIPS-compliant random number generation
-type Random struct {
-	io.Reader
-}
-
-// Read implements io.Reader interface for Random
-func (r *Random) Read(b []byte) (n int, err error) {
-	return random.Reader.Read(b)
-}
-
-var DefaultRandom = &Random{Reader: random.Reader}
+var Random = random.Reader
 
 // ECC provides FIPS-compliant elliptic curve cryptography
 var ECC = struct {

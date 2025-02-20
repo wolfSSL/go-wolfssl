@@ -2,6 +2,7 @@ package wolfssl
 
 import (
 	"hash"
+	"io"
 
 	"github.com/wolfssl/go-wolfssl/aes"
 	"github.com/wolfssl/go-wolfssl/ecc"
@@ -27,24 +28,28 @@ const (
 )
 
 // Random provides FIPS-compliant random number generation
-var Random = random.Reader
+var Random = struct {
+	Reader io.Reader
+}{
+	Reader: random.DefaultReader,
+}
 
 // ECC provides FIPS-compliant elliptic curve cryptography
 var ECC = struct {
-	GenerateKey              func(curve int) (*ecc.Key, error)
-	Sign                     func(priv *ecc.Key, message []byte) ([]byte, error)
-	Verify                   func(pub []byte, message []byte, sig []byte) bool
-	ImportPrivate            func(curve int, data []byte) (*ecc.Key, error)
-	ImportPublic             func(curve int, data []byte) ([]byte, error)
-	ImportPublicFromPrivate  func(priv *ecc.Key) ([]byte, error)
-	ExportPublicFromPrivate  func(priv *ecc.Key) ([]byte, error)
+	GenerateKey            func(curve int, rng []byte) ([]byte, []byte, error)
+	Sign                   func(priv *ecc.Key, message []byte) ([]byte, error)
+	Verify                 func(pub []byte, message []byte, sig []byte) bool
+	ImportPrivate          func(curve int, data []byte) (*ecc.Key, error)
+	ImportPublic           func(curve int, data []byte) (*ecc.Key, error)
+	SharedSecret           func(priv *ecc.Key, pub []byte) ([]byte, error)
+	ExportPublicFromPrivate func(priv *ecc.Key) ([]byte, error)
 }{
-	GenerateKey:             ecc.GenerateKey,
-	Sign:                    ecc.Sign,
-	Verify:                  ecc.Verify,
-	ImportPrivate:           ecc.ImportPrivate,
-	ImportPublic:            ecc.ImportPublic,
-	ImportPublicFromPrivate: ecc.ImportPublicFromPrivate,
+	GenerateKey:            ecc.GenerateKey,
+	Sign:                   ecc.Sign,
+	Verify:                 ecc.Verify,
+	ImportPrivate:          ecc.ImportPrivate,
+	ImportPublic:           ecc.ImportPublic,
+	SharedSecret:           ecc.SharedSecret,
 	ExportPublicFromPrivate: ecc.ExportPublicFromPrivate,
 }
 

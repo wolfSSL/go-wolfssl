@@ -3,11 +3,12 @@ package aes
 import (
 	"bytes"
 	"testing"
+	"github.com/wolfssl/go-wolfssl/internal/types"
 )
 
 func TestSealOpen(t *testing.T) {
 	key := make([]byte, 32)
-	nonce := make([]byte, 24)
+	nonce := make([]byte, types.WC_AES_GCM_NONCE_SIZE)
 	plaintext := []byte("test message")
 
 	// Test encryption
@@ -31,7 +32,7 @@ func TestSealOpen(t *testing.T) {
 
 func TestInvalidKey(t *testing.T) {
 	key := make([]byte, 16) // Wrong size
-	nonce := make([]byte, 24)
+	nonce := make([]byte, types.WC_AES_GCM_NONCE_SIZE)
 	plaintext := []byte("test")
 
 	if _, err := Seal(key, nonce, plaintext); err == nil {
@@ -45,7 +46,7 @@ func TestInvalidKey(t *testing.T) {
 
 func TestInvalidNonce(t *testing.T) {
 	key := make([]byte, 32)
-	nonce := make([]byte, 12) // Wrong size
+	nonce := make([]byte, 24) // Wrong size
 	plaintext := []byte("test")
 
 	if _, err := Seal(key, nonce, plaintext); err == nil {

@@ -28,6 +28,13 @@ func TestImportPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer key.Free()
+
+	pubKey := key.Public()
+	if pubKey == nil {
+		t.Fatal("failed to get public key")
+	}
+	defer pubKey.Free()
 
 	exportedPub, err := ExportPublicFromPrivate(key)
 	if err != nil {
@@ -49,13 +56,13 @@ func TestImportPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer key.Free()
 
 	msg := []byte("test message")
 	sig := make([]byte, 64)
 
-	err = Verify(key, msg, sig)
-	if err == nil {
-		t.Error("expected error for invalid signature")
+	if Verify(pub, msg, sig) {
+		t.Error("expected invalid signature")
 	}
 }
 
@@ -69,11 +76,7 @@ func TestSignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	pubKey, err := ImportPublic(ECC_SECP256R1, pub)
-	if err != nil {
-		t.Fatal(err)
-	}
+	defer privKey.Free()
 
 	msg := []byte("test message")
 	sig, err := Sign(privKey, msg)
@@ -86,17 +89,15 @@ func TestSignAndVerify(t *testing.T) {
 		t.Errorf("signature length = %d, want between 60 and 72", len(sig))
 	}
 
-	err = Verify(pubKey, msg, sig)
-	if err != nil {
-		t.Error(err)
+	if !Verify(pub, msg, sig) {
+		t.Error("expected valid signature")
 	}
 
 	// Test invalid signature
 	invalidSig := make([]byte, len(sig))
 	copy(invalidSig, sig)
 	invalidSig[0] ^= 0xff
-	err = Verify(pubKey, msg, invalidSig)
-	if err == nil {
-		t.Error("expected error for invalid signature")
+	if Verify(pub, msg, invalidSig) {
+		t.Error("expected invalid signature")
 	}
 }

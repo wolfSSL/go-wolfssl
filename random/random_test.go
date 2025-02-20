@@ -41,6 +41,18 @@ func TestReader(t *testing.T) {
 	}
 }
 
+func TestDefaultReader(t *testing.T) {
+	// Test that DefaultReader works
+	b := make([]byte, 32)
+	n, err := DefaultReader.Read(b)
+	if err != nil {
+		t.Fatalf("failed to read from DefaultReader: %v", err)
+	}
+	if n != len(b) {
+		t.Errorf("read %d bytes, want %d", n, len(b))
+	}
+}
+
 func TestReaderClose(t *testing.T) {
 	r, err := NewReader()
 	if err != nil {

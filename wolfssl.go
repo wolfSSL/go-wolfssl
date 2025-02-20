@@ -1,5 +1,5 @@
-// Package wolfSSL provides FIPS-compliant cryptographic functions
-package wolfSSL
+// Package wolfssl provides FIPS-compliant cryptographic functions
+package wolfssl
 
 import (
     "github.com/wolfssl/go-wolfssl/internal/binding/cgo"

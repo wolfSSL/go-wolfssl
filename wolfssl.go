@@ -1,7 +1,6 @@
 package wolfssl
 
 import (
-	"crypto/cipher"
 	"hash"
 	"io"
 

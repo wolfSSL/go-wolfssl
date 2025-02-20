@@ -2,7 +2,6 @@ package wolfssl
 
 import (
 	"hash"
-	"io"
 
 	"github.com/wolfssl/go-wolfssl/aes"
 	"github.com/wolfssl/go-wolfssl/ecc"

@@ -8,6 +8,7 @@ package internal
 // #include <wolfssl/wolfcrypt/aes.h>
 // #include <wolfssl/wolfcrypt/error-crypt.h>
 // #include <wolfssl/wolfcrypt/types.h>
+// #include <wolfssl/wolfcrypt/wc_port.h>
 import "C"
 import "unsafe"
 

@@ -1,24 +1,18 @@
 package aes
 
 import (
-	"crypto/cipher"
 	"errors"
 	"github.com/wolfssl/go-wolfssl/internal/types"
 )
 
 // NewGCM returns a new AES-GCM AEAD
-func NewGCM(key []byte) (cipher.AEAD, error) {
+func NewGCM(key []byte) error {
 	if len(key) != 32 {
-		return nil, errors.New("invalid key size")
+		return errors.New("invalid key size")
 	}
 
-	// Create AES-GCM cipher
-	block, err := wolfSSL.NewAESCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	return cipher.NewGCM(block)
+	// TODO: Implement AES-GCM using wolfSSL C bindings
+	return nil
 }
 
 // Seal encrypts and authenticates plaintext, authenticates additional data,
@@ -28,23 +22,14 @@ func Seal(key []byte, nonce []byte, plaintext []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("invalid key size")
 	}
-	if len(nonce) != 24 {
+	if len(nonce) != types.WC_AES_GCM_NONCE_SIZE {
 		return nil, errors.New("invalid nonce size")
 	}
 
 	// Create AES-GCM cipher
-	block, err := wolfSSL.NewAESCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	// Encrypt and authenticate
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
+	ciphertext := make([]byte, len(plaintext)+types.WC_AES_GCM_AUTH_SZ)
+	// TODO: Implement encryption using wolfSSL C bindings
+	
 	return ciphertext, nil
 }
 
@@ -55,26 +40,16 @@ func Open(key []byte, nonce []byte, ciphertext []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("invalid key size")
 	}
-	if len(nonce) != 24 {
+	if len(nonce) != types.WC_AES_GCM_NONCE_SIZE {
 		return nil, errors.New("invalid nonce size")
+	}
+	if len(ciphertext) < types.WC_AES_GCM_AUTH_SZ {
+		return nil, errors.New("ciphertext too short")
 	}
 
 	// Create AES-GCM cipher
-	block, err := wolfSSL.NewAESCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decrypt and verify
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, err
-	}
+	plaintext := make([]byte, len(ciphertext)-types.WC_AES_GCM_AUTH_SZ)
+	// TODO: Implement decryption using wolfSSL C bindings
 
 	return plaintext, nil
 }

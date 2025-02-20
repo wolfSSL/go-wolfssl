@@ -7,6 +7,7 @@ package internal
 // #include <wolfssl/wolfcrypt/settings.h>
 // #include <wolfssl/wolfcrypt/aes.h>
 // #include <wolfssl/wolfcrypt/error-crypt.h>
+// #include <wolfssl/wolfcrypt/types.h>
 import "C"
 import "unsafe"
 

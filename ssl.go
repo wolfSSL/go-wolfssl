@@ -66,6 +66,7 @@ import (
 )
 
 const SSL_FILETYPE_PEM = 1
+const SSL_FILETYPE_ASN1 = 2
 const WOLFSSL_SUCCESS  = 1
 
 type WOLFSSL = C.struct_WOLFSSL

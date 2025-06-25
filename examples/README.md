@@ -80,3 +80,21 @@ To build the app, run :
 go build ecc-sign-verify.go
 ```
 
+## Building the x509 cert verify example
+
+An application that loads a root CA, two intermediate certs, then verifies the leaf cert. Make sure wolfSSL was configured with "--enable-opensslall" to run this example. Located in `x509` directory.
+
+To build the app, run :
+```
+go build certVerify.go
+```
+
+## Building the x509 extract key example
+
+An application that loads an X509 cert, extracts the public key DER buffer from it, and demonstrates how to import der buffer into an ecc key object. Make sure wolfSSL was configured with "--enable-opensslall" to run this example. Located in `x509` directory.
+
+To build the app, run :
+```
+go build extractKey.go
+```
+

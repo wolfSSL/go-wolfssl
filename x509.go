@@ -31,18 +31,19 @@ package wolfSSL
 // typedef struct WOLFSSL_X509 {} WOLFSSL_X509;
 // typedef struct WOLFSSL_X509_STORE {} WOLFSSL_X509_STORE;
 // typedef struct WOLFSSL_STACK {} WOLFSSL_STACK;
-// static WOLFSSL_X509_STORE* X509_STORE_new(void) { return 0; }
+// static WOLFSSL_X509_STORE* X509_STORE_new(void) { return NULL; }
 // static void X509_STORE_free(WOLFSSL_X509_STORE* s) { (void)s; }
 // static int X509_STORE_load_locations(WOLFSSL_X509_STORE* s, const char* file, const char* path) { return -174; }
-// static WOLFSSL_STACK* sk_X509_new_null(void) { return 0; }
+// static WOLFSSL_STACK* sk_X509_new_null(void) { return NULL; }
 // static int sk_X509_push(WOLFSSL_STACK* sk, WOLFSSL_X509* cert) { return -174; }
 // static void sk_X509_free(WOLFSSL_STACK* sk) { (void)sk; }
-// static WOLFSSL_X509_STORE_CTX* X509_STORE_CTX_new(void) { return 0; }
+// static WOLFSSL_X509_STORE_CTX* X509_STORE_CTX_new(void) { return NULL; }
 // static void X509_STORE_CTX_free(WOLFSSL_X509_STORE_CTX* ctx) { (void)ctx; }
 // static int X509_STORE_CTX_init(WOLFSSL_X509_STORE_CTX* ctx, WOLFSSL_X509_STORE* store,
 //                                 WOLFSSL_X509* cert, WOLFSSL_STACK* chain) { return -174; }
 // static int X509_verify_cert(WOLFSSL_X509_STORE_CTX* ctx) { return -174; }
-// static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return 0; }
+// static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return NULL; }
+// static int wolfSSL_X509_get_pubkey_buffer(WOLFSSL_X509* x509, unsigned char* buf, int* bufSz) { return -174; }
 // #endif
 import "C"
 import (
@@ -106,4 +107,11 @@ func WolfSSL_X509_load_certificate_buffer(buff []byte, buffSz int, certType int)
 	return C.wolfSSL_X509_load_certificate_buffer((*C.byte)(unsafe.Pointer(&buff[0])), C.int(buffSz), C.int(certType))
 }
 
+func WolfSSL_X509_get_pubkey_buffer(cert *WOLFSSL_X509, out []byte, outLen *int) int {
+	var outPtr *C.uchar
+	if len(out) > 0 {
+		outPtr = (*C.uchar)(unsafe.Pointer(&out[0]))
+	}
+	return int(C.wolfSSL_X509_get_pubkey_buffer(cert, outPtr, (*C.int)(unsafe.Pointer(outLen))))
+}
 

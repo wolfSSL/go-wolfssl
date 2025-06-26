@@ -1,6 +1,6 @@
 /* ecc.go
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2025 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -43,6 +43,10 @@ package wolfSSL
 //  }
 // int wc_ecc_verify_hash(const byte* sig, word32 siglen, const byte* hash,
 //                        word32 hashlen, int* res, ecc_key* key) {
+//      return -174;
+//  }
+// int wc_EccPublicKeyDecode(const byte* input, word32* inOutIdx,
+//                        ecc_key* key, word32 inSz) {
 //      return -174;
 //  }
 // #endif
@@ -121,4 +125,8 @@ func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen 
     ret := int(C.wc_ecc_shared_secret(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
     return ret
+}
+
+func Wc_EccPublicKeyDecode(pubKey []byte, idx *int, key *C.struct_ecc_key, pubSz int) int {
+	return int(C.wc_EccPublicKeyDecode((*C.uchar)(unsafe.Pointer(&pubKey[0])), (*C.word32)(unsafe.Pointer(idx)), key, C.word32(pubSz)))
 }

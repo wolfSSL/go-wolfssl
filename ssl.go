@@ -1,6 +1,6 @@
 /* ssl.go
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2025 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -66,6 +66,7 @@ import (
 )
 
 const SSL_FILETYPE_PEM = 1
+const SSL_FILETYPE_ASN1 = 2
 const WOLFSSL_SUCCESS  = 1
 
 type WOLFSSL = C.struct_WOLFSSL

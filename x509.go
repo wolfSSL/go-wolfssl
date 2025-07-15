@@ -44,6 +44,16 @@ package wolfSSL
 // static int X509_verify_cert(WOLFSSL_X509_STORE_CTX* ctx) { return -174; }
 // static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return NULL; }
 // static int wolfSSL_X509_get_pubkey_buffer(WOLFSSL_X509* x509, unsigned char* buf, int* bufSz) { return -174; }
+// typedef struct WOLFSSL_X509_NAME {} WOLFSSL_X509_NAME;
+// typedef struct WOLFSSL_X509_NAME_ENTRY {} WOLFSSL_X509_NAME_ENTRY;
+// static WOLFSSL_X509_NAME* wolfSSL_X509_get_subject_name(WOLFSSL_X509* cert) { return NULL; }
+// static int wolfSSL_X509_NAME_entry_count(WOLFSSL_X509_NAME* name) { return -174; }
+// static WOLFSSL_X509_NAME_ENTRY* wolfSSL_X509_NAME_get_entry(WOLFSSL_X509_NAME* name, int loc) { return NULL; }
+// static WOLFSSL_ASN1_OBJECT* wolfSSL_X509_NAME_ENTRY_get_object(WOLFSSL_X509_NAME_ENTRY* ne) { return NULL; }
+// static WOLFSSL_ASN1_STRING* wolfSSL_X509_NAME_ENTRY_get_data(WOLFSSL_X509_NAME_ENTRY* in) { return NULL; }
+// static int wolfSSL_OBJ_obj2txt(char* buf, int buf_len, const WOLFSSL_ASN1_OBJECT* a, int no_name) { return -174; }
+// static const unsigned char* wolfSSL_ASN1_STRING_get0_data(const WOLFSSL_ASN1_STRING* asn) { return NULL; }
+// static int wolfSSL_ASN1_STRING_length(const WOLFSSL_ASN1_STRING* asn) { return -174; }
 // #endif
 import "C"
 import (
@@ -51,6 +61,10 @@ import (
 )
 
 type WOLFSSL_X509 = C.struct_WOLFSSL_X509
+type WOLFSSL_X509_NAME = C.struct_WOLFSSL_X509_NAME
+type WOLFSSL_X509_NAME_ENTRY = C.struct_WOLFSSL_X509_NAME_ENTRY
+type WOLFSSL_ASN1_OBJECT = C.struct_WOLFSSL_ASN1_OBJECT
+type WOLFSSL_ASN1_STRING = C.struct_WOLFSSL_ASN1_STRING
 
 // X509_STORE wrappers
 func WolfSSL_X509_STORE_new() *C.WOLFSSL_X509_STORE {
@@ -113,5 +127,61 @@ func WolfSSL_X509_get_pubkey_buffer(cert *WOLFSSL_X509, out []byte, outLen *int)
 		outPtr = (*C.uchar)(unsafe.Pointer(&out[0]))
 	}
 	return int(C.wolfSSL_X509_get_pubkey_buffer(cert, outPtr, (*C.int)(unsafe.Pointer(outLen))))
+}
+
+func WolfSSL_X509_get_subject_name(cert *WOLFSSL_X509) *WOLFSSL_X509_NAME {
+	return (*WOLFSSL_X509_NAME)(C.wolfSSL_X509_get_subject_name((*C.struct_WOLFSSL_X509)(cert)))
+}
+
+func WolfSSL_X509_NAME_oneline(name *WOLFSSL_X509_NAME, in []byte, sz int) string {
+	var inPtr *C.char
+	if len(in) > 0 {
+		inPtr = (*C.char)(unsafe.Pointer(&in[0]))
+	}
+	result := C.wolfSSL_X509_NAME_oneline((*C.struct_WOLFSSL_X509_NAME)(name), inPtr, C.int(sz))
+	if result != nil {
+		return C.GoString(result)
+	}
+	return ""
+}
+
+func WolfSSL_X509_NAME_entry_count(name *WOLFSSL_X509_NAME) int {
+	return int(C.wolfSSL_X509_NAME_entry_count((*C.struct_WOLFSSL_X509_NAME)(name)))
+}
+
+func WolfSSL_X509_NAME_get_entry(name *WOLFSSL_X509_NAME, loc int) *WOLFSSL_X509_NAME_ENTRY {
+	return (*WOLFSSL_X509_NAME_ENTRY)(C.wolfSSL_X509_NAME_get_entry((*C.struct_WOLFSSL_X509_NAME)(name), C.int(loc)))
+}
+
+func WolfSSL_X509_NAME_ENTRY_get_object(ne *WOLFSSL_X509_NAME_ENTRY) *WOLFSSL_ASN1_OBJECT {
+	return (*WOLFSSL_ASN1_OBJECT)(C.wolfSSL_X509_NAME_ENTRY_get_object((*C.struct_WOLFSSL_X509_NAME_ENTRY)(ne)))
+}
+
+func WolfSSL_X509_NAME_ENTRY_get_data(in *WOLFSSL_X509_NAME_ENTRY) *WOLFSSL_ASN1_STRING {
+	return (*WOLFSSL_ASN1_STRING)(C.wolfSSL_X509_NAME_ENTRY_get_data((*C.struct_WOLFSSL_X509_NAME_ENTRY)(in)))
+}
+
+func WolfSSL_OBJ_obj2txt(buf []byte, bufLen int, a *WOLFSSL_ASN1_OBJECT, noName int) int {
+	var bufPtr *C.char
+	if len(buf) > 0 {
+		bufPtr = (*C.char)(unsafe.Pointer(&buf[0]))
+	}
+	return int(C.wolfSSL_OBJ_obj2txt(bufPtr, C.int(bufLen), (*C.struct_WOLFSSL_ASN1_OBJECT)(a), C.int(noName)))
+}
+
+func WolfSSL_ASN1_STRING_get0_data(asn *WOLFSSL_ASN1_STRING) []byte {
+	data := C.wolfSSL_ASN1_STRING_get0_data((*C.struct_WOLFSSL_ASN1_STRING)(asn))
+	if data == nil {
+		return nil
+	}
+	length := int(C.wolfSSL_ASN1_STRING_length((*C.struct_WOLFSSL_ASN1_STRING)(asn)))
+	if length <= 0 {
+		return nil
+	}
+	return C.GoBytes(unsafe.Pointer(data), C.int(length))
+}
+
+func WolfSSL_ASN1_STRING_length(asn *WOLFSSL_ASN1_STRING) int {
+	return int(C.wolfSSL_ASN1_STRING_length((*C.struct_WOLFSSL_ASN1_STRING)(asn)))
 }
 

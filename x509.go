@@ -27,6 +27,10 @@ package wolfSSL
 // #include <wolfssl/openssl/ssl.h>
 // #include <wolfssl/openssl/stack.h>
 // #include <wolfssl/openssl/bio.h>
+// #include <wolfssl/openssl/pem.h>
+// #include <wolfssl/openssl/asn1.h>
+// #include <wolfssl/openssl/objects.h>
+// #include <wolfssl/openssl/crypto.h>
 // #ifndef OPENSSL_ALL
 // typedef struct WOLFSSL_X509 {} WOLFSSL_X509;
 // typedef struct WOLFSSL_X509_STORE {} WOLFSSL_X509_STORE;
@@ -44,6 +48,16 @@ package wolfSSL
 // static int X509_verify_cert(WOLFSSL_X509_STORE_CTX* ctx) { return -174; }
 // static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return NULL; }
 // static int wolfSSL_X509_get_pubkey_buffer(WOLFSSL_X509* x509, unsigned char* buf, int* bufSz) { return -174; }
+// typedef struct WOLFSSL_BIO {} WOLFSSL_BIO;
+// static WOLFSSL_BIO* wolfSSL_BIO_new_mem_buf(const void* buf, int len) { return NULL; }
+// static int wolfSSL_BIO_free(WOLFSSL_BIO* bio) { return -174; }
+// int wolfSSL_i2d_X509(WOLFSSL_X509* x509, unsigned char** out) { return -174; }
+// static void wolfSSL_X509_free(WOLFSSL_X509* x509) { (void)x509; }
+// static WOLFSSL_ASN1_OBJECT* wolfSSL_d2i_ASN1_OBJECT(WOLFSSL_ASN1_OBJECT** a, const unsigned char** der, long length) { return NULL; }
+// int wolfSSL_ASN1_get_object(const unsigned char** in, long* objLen, int* tag, int* cls, long inLen) { return -174; }
+// static void wolfSSL_ASN1_OBJECT_free(WOLFSSL_ASN1_OBJECT* obj) { (void)obj; }
+// static WOLFSSL_ASN1_OBJECT* wolfSSL_OBJ_txt2obj(const char* s, int no_name) { return NULL; }
+// static int wolfSSL_OBJ_cmp(const WOLFSSL_ASN1_OBJECT* a, const WOLFSSL_ASN1_OBJECT* b) { return -174; }
 // #endif
 import "C"
 import (
@@ -51,6 +65,8 @@ import (
 )
 
 type WOLFSSL_X509 = C.struct_WOLFSSL_X509
+type WOLFSSL_BIO = C.struct_WOLFSSL_BIO
+type WOLFSSL_ASN1_OBJECT = C.struct_WOLFSSL_ASN1_OBJECT
 
 // X509_STORE wrappers
 func WolfSSL_X509_STORE_new() *C.WOLFSSL_X509_STORE {
@@ -113,5 +129,100 @@ func WolfSSL_X509_get_pubkey_buffer(cert *WOLFSSL_X509, out []byte, outLen *int)
 		outPtr = (*C.uchar)(unsafe.Pointer(&out[0]))
 	}
 	return int(C.wolfSSL_X509_get_pubkey_buffer(cert, outPtr, (*C.int)(unsafe.Pointer(outLen))))
+}
+
+func WolfSSL_BIO_new_mem_buf(buf []byte, bufLen int) *WOLFSSL_BIO {
+	var bufPtr *C.char
+	if bufLen > 0 && bufLen <= len(buf) {
+		bufPtr = (*C.char)(unsafe.Pointer(&buf[0]))
+	}
+	return (*WOLFSSL_BIO)(C.wolfSSL_BIO_new_mem_buf(unsafe.Pointer(bufPtr), C.int(bufLen)))
+}
+
+func WolfSSL_BIO_free(bio *WOLFSSL_BIO) int {
+	return int(C.wolfSSL_BIO_free((*C.struct_WOLFSSL_BIO)(bio)))
+}
+
+func WolfSSL_i2d_X509(x509 *WOLFSSL_X509, out *[]byte) int {
+	var outPtr *C.uchar
+	result := int(C.wolfSSL_i2d_X509((*C.struct_WOLFSSL_X509)(x509), &outPtr))
+	if result > 0 && outPtr != nil {
+		*out = C.GoBytes(unsafe.Pointer(outPtr), C.int(result))
+	}
+	return result
+}
+
+func WolfSSL_X509_free(x509 *WOLFSSL_X509) {
+	C.wolfSSL_X509_free((*C.struct_WOLFSSL_X509)(x509))
+}
+
+func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen int) int {
+	if len(*in) == 0 {
+		return -1
+	}
+	
+	cInPtr := (*C.uchar)(C.malloc(C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(cInPtr))
+	
+	inPtr := (*C.uchar)(unsafe.Pointer(&(*in)[0]))
+	*(**C.uchar)(unsafe.Pointer(cInPtr)) = inPtr
+	
+	var cLen C.long
+	var cTag C.int
+	var cCls C.int
+	
+	result := int(C.wolfSSL_ASN1_get_object((**C.uchar)(unsafe.Pointer(cInPtr)), &cLen, &cTag, &cCls, C.long(inLen)))
+	
+	if result >= 0 {
+		newPtr := *(**C.uchar)(unsafe.Pointer(cInPtr))
+		offset := uintptr(unsafe.Pointer(newPtr)) - uintptr(unsafe.Pointer(&(*in)[0]))
+		*in = (*in)[offset:]
+		*objLen = int(cLen)
+		*tag = int(cTag)
+		*cls = int(cCls)
+	}
+	
+	return result
+}
+
+func WolfSSL_d2i_ASN1_OBJECT(a **WOLFSSL_ASN1_OBJECT, der *[]byte, length int) *WOLFSSL_ASN1_OBJECT {
+	if len(*der) == 0 {
+		return nil
+	}
+	
+	var aPtr **C.struct_WOLFSSL_ASN1_OBJECT
+	if a != nil {
+		aPtr = (**C.struct_WOLFSSL_ASN1_OBJECT)(unsafe.Pointer(a))
+	}
+	
+	cDerPtr := (*C.uchar)(C.malloc(C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(cDerPtr))
+	
+	derPtr := (*C.uchar)(unsafe.Pointer(&(*der)[0]))
+	*(**C.uchar)(unsafe.Pointer(cDerPtr)) = derPtr
+	
+	result := (*WOLFSSL_ASN1_OBJECT)(C.wolfSSL_d2i_ASN1_OBJECT(aPtr, (**C.uchar)(unsafe.Pointer(cDerPtr)), C.long(length)))
+	
+	if result != nil {
+		newPtr := *(**C.uchar)(unsafe.Pointer(cDerPtr))
+		offset := uintptr(unsafe.Pointer(newPtr)) - uintptr(unsafe.Pointer(&(*der)[0]))
+		*der = (*der)[offset:]
+	}
+	
+	return result
+}
+
+func WolfSSL_ASN1_OBJECT_free(obj *WOLFSSL_ASN1_OBJECT) {
+	C.wolfSSL_ASN1_OBJECT_free((*C.struct_WOLFSSL_ASN1_OBJECT)(obj))
+}
+
+func WolfSSL_OBJ_txt2obj(s string, noName int) *WOLFSSL_ASN1_OBJECT {
+	cStr := C.CString(s)
+	defer C.free(unsafe.Pointer(cStr))
+	return (*WOLFSSL_ASN1_OBJECT)(C.wolfSSL_OBJ_txt2obj(cStr, C.int(noName)))
+}
+
+func WolfSSL_OBJ_cmp(a *WOLFSSL_ASN1_OBJECT, b *WOLFSSL_ASN1_OBJECT) int {
+	return int(C.wolfSSL_OBJ_cmp((*C.struct_WOLFSSL_ASN1_OBJECT)(a), (*C.struct_WOLFSSL_ASN1_OBJECT)(b)))
 }
 

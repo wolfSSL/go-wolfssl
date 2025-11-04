@@ -52,6 +52,18 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// #else
+// #include <stdlib.h>
+// Aes* wc_AesAllocAligned(void) {
+//     Aes* ptr;
+//     if (posix_memalign((void**)&ptr, 16, sizeof(Aes)) != 0) {
+//         return NULL;
+//     }
+//     return ptr;
+// }
+// void wc_AesFreeAllocAligned(Aes* ptr) {
+//     free(ptr);
+// }
 // #endif
 import "C"
 import (
@@ -69,6 +81,15 @@ const AES_DECRYPTION   = int(C.AES_DECRYPTION)
 const INVALID_DEVID    = int(C.INVALID_DEVID)
 
 type Aes = C.struct_Aes
+
+/* Returns a 16-byte aligned Aes Struct allocated on the C Heap (needed by AES-NI) */
+func Wc_AesAllocAligned() *C.struct_Aes {
+    return C.wc_AesAllocAligned()
+}
+
+func Wc_AesFreeAllocAligned(aes *C.struct_Aes) {
+    C.wc_AesFreeAllocAligned(aes)
+}
 
 func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) int {
         /* TODO: HANDLE NON NIL HEAP */

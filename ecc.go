@@ -117,7 +117,11 @@ func Wc_ecc_sign_hash(in []byte, inLen int, out []byte, outLen *int, rng *C.stru
 
 func Wc_ecc_verify_hash(sig []byte, sigLen int, hash []byte, hashLen int, res *int, key *C.struct_ecc_key) int {
     return int(C.wc_ecc_verify_hash((*C.uchar)(unsafe.Pointer(&sig[0])), C.word32(sigLen),
-               (*C.uchar)(unsafe.Pointer(&hash[0])), C.word32(sigLen), (*C.int)(unsafe.Pointer(res)), key))
+               (*C.uchar)(unsafe.Pointer(&hash[0])), C.word32(hashLen), (*C.int)(unsafe.Pointer(res)), key))
+}
+
+func Wc_ecc_check_key(key *C.struct_ecc_key) int {
+    return int(C.wc_ecc_check_key(key))
 }
 
 func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen *int) int {

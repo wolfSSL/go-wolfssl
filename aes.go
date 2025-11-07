@@ -52,6 +52,16 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// #elif defined(_WIN32)
+// #include <stdlib.h>
+// #include <malloc.h>
+// Aes* wc_AesAllocAligned(void) {
+//     Aes* ptr = (Aes*)_aligned_malloc(sizeof(Aes),16);
+//     return ptr;
+// }
+// void wc_AesFreeAllocAligned(Aes* ptr) {
+//     _aligned_free(ptr);
+// }
 // #else
 // #include <stdlib.h>
 // Aes* wc_AesAllocAligned(void) {

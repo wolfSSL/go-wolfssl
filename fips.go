@@ -39,6 +39,19 @@ package wolfSSL
 // int WC_PRIVATE_KEY_UNLOCK(void) {
 //      return WC_SPKRE_F(1,WC_KEYTYPE_ALL);
 // }
+// void fipsCb(int ok, int err, const char* hash)
+// {
+//    printf("in my Fips callback, ok = %d, err = %d\n", ok, err);
+//    printf("hash = %s\n", hash);
+//
+//    if (err == -203) {
+//        printf("In core integrity hash check failure, copy above hash\n");
+//        printf("into verifyCore[] in fips_test.c and rebuild\n");
+//    }
+// }
+// void wc_SetDefaultFips_Cb(void) {
+// 	wolfCrypt_SetCb_fips(fipsCb);
+// }
 // #else
 // int WC_PRIVATE_KEY_LOCK(void) {
 //      return -174;
@@ -49,8 +62,15 @@ package wolfSSL
 // int wc_RunAllCast_fips(void) {
 //      return -174;
 // }
+// void wc_SetDefaultFips_Cb(void) {
+// 	return;
+// }
 // #endif
 import "C"
+
+func Wc_SetDefaultFips_Cb() {
+    C.wc_SetDefaultFips_Cb()
+}
 
 func Wc_SetDefaultSeed_Cb() int {
     return int(C.wc_SetSeed_Cb((C.wc_RngSeed_Cb)(C.wc_GenerateSeed)))

@@ -21,8 +21,8 @@
 
 package wolftls
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
+// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl
+// #cgo LDFLAGS: -L/usr/lib -lwolfssl -lm
 import "C"
 
 import (

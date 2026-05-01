@@ -30,25 +30,30 @@ const eccP256KeySize = 32
 
 func makeEccKey(t *testing.T) *Ecc_key {
 	t.Helper()
-	var key Ecc_key
-	ret := Wc_ecc_init(&key)
+	key := Wc_Ecc_AllocKey()
+	if key == nil {
+		t.Fatal("Wc_Ecc_AllocKey returned nil")
+	}
+	ret := Wc_ecc_init(key)
 	if ret == notCompiledIn {
+		Wc_Ecc_FreeKey(key)
 		t.Skip("ECC not compiled in")
 	}
 	if ret != 0 {
+		Wc_Ecc_FreeKey(key)
 		t.Fatalf("Wc_ecc_init: %d", ret)
 	}
-	t.Cleanup(func() { Wc_ecc_free(&key) })
+	t.Cleanup(func() { Wc_Ecc_FreeKey(key) })
 
 	rng := newRng(t)
-	ret = Wc_ecc_make_key(rng, eccP256KeySize, &key)
+	ret = Wc_ecc_make_key(rng, eccP256KeySize, key)
 	if ret == notCompiledIn {
 		t.Skip("ECC not compiled in")
 	}
 	if ret != 0 {
 		t.Fatalf("Wc_ecc_make_key: %d", ret)
 	}
-	return &key
+	return key
 }
 
 func TestEcc_SignAndVerify_RoundTrip(t *testing.T) {
@@ -168,13 +173,16 @@ func TestEcc_ExportImportX963_RoundTrip(t *testing.T) {
 		t.Fatalf("pubLen %d out of range", pubLen)
 	}
 
-	var imported Ecc_key
-	if ret := Wc_ecc_init(&imported); ret != 0 {
+	imported := Wc_Ecc_AllocKey()
+	if imported == nil {
+		t.Fatal("Wc_Ecc_AllocKey returned nil")
+	}
+	defer Wc_Ecc_FreeKey(imported)
+	if ret := Wc_ecc_init(imported); ret != 0 {
 		t.Fatalf("Wc_ecc_init: %d", ret)
 	}
-	defer Wc_ecc_free(&imported)
 
-	if ret := Wc_ecc_import_x963_ex(pubBuf[:pubLen], pubLen, &imported, ECC_SECP256R1); ret != 0 {
+	if ret := Wc_ecc_import_x963_ex(pubBuf[:pubLen], pubLen, imported, ECC_SECP256R1); ret != 0 {
 		t.Fatalf("Wc_ecc_import_x963_ex: %d", ret)
 	}
 }

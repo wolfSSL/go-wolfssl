@@ -30,21 +30,30 @@ const curve25519KeySize = 32
 
 func makeCurve25519Key(t *testing.T) *Curve25519_key {
 	t.Helper()
-	var key Curve25519_key
-	ret := Wc_curve25519_init(&key)
-	if ret == -174 {
+	key := Wc_Curve25519_AllocKey()
+	if key == nil {
+		t.Fatal("Wc_Curve25519_AllocKey returned nil")
+	}
+	ret := Wc_curve25519_init(key)
+	if ret == notCompiledIn {
+		Wc_Curve25519_FreeKey(key)
 		t.Skip("curve25519 not compiled in")
 	}
 	if ret != 0 {
+		Wc_Curve25519_FreeKey(key)
 		t.Fatalf("Wc_curve25519_init: %d", ret)
 	}
-	t.Cleanup(func() { Wc_curve25519_free(&key) })
+	t.Cleanup(func() { Wc_Curve25519_FreeKey(key) })
 
 	rng := newRng(t)
-	if ret := Wc_curve25519_make_key(rng, curve25519KeySize, &key); ret != 0 {
+	ret = Wc_curve25519_make_key(rng, curve25519KeySize, key)
+	if ret == notCompiledIn {
+		t.Skip("curve25519 not compiled in")
+	}
+	if ret != 0 {
 		t.Fatalf("Wc_curve25519_make_key: %d", ret)
 	}
-	return &key
+	return key
 }
 
 // Both peers should derive the same shared secret (X25519 ECDH).

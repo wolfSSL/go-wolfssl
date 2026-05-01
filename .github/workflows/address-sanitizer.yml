@@ -1,0 +1,78 @@
+name: AddressSanitizer Build and Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_asan:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+        go_version: [ '1.23' ]
+        wolfssl_configure: [
+          '--enable-all --enable-opensslall --enable-opensslextra --enable-debug',
+        ]
+    name: ${{ matrix.os }} (Go ${{ matrix.go_version }}, ASan, ${{ matrix.wolfssl_configure }})
+    if: github.repository_owner == 'wolfssl'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go_version }}
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
+
+      - name: Cache wolfSSL ASan build
+        id: cache-wolfssl-asan
+        uses: actions/cache@v4
+        with:
+          path: /tmp/wolfssl-install
+          key: wolfssl-asan-${{ runner.os }}-${{ hashFiles('.github/workflows/address-sanitizer.yml') }}-${{ matrix.wolfssl_configure }}
+
+      - name: Build native wolfSSL with AddressSanitizer
+        if: steps.cache-wolfssl-asan.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/wolfSSL/wolfssl.git /tmp/wolfssl
+          cd /tmp/wolfssl
+          ./autogen.sh
+          ./configure --prefix=/tmp/wolfssl-install ${{ matrix.wolfssl_configure }} \
+              CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1" \
+              LDFLAGS="-fsanitize=address"
+          make -j$(nproc)
+          make install
+
+      - name: Install wolfSSL system-wide
+        run: |
+          sudo cp -r /tmp/wolfssl-install/lib/* /usr/local/lib/
+          sudo cp -r /tmp/wolfssl-install/include/* /usr/local/include/
+          sudo ldconfig
+
+      - name: Run unit tests with ASan instrumentation
+        env:
+          # Propagate ASan flags through cgo so the test binary links the
+          # ASan runtime alongside libwolfssl. -I/-L paths are explicit so this
+          # doesn't depend on /usr/local being in gcc/ld's default search list.
+          CGO_CFLAGS: "-I/usr/local/include -fsanitize=address -fno-omit-frame-pointer -g -O1"
+          CGO_LDFLAGS: "-L/usr/local/lib -fsanitize=address"
+          # Detect leaks at exit; abort on any error.
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:strict_string_checks=1:print_stacktrace=1"
+        run: go test -count=1 -v . ./handles ./wolftls ./wolfx509
+
+      - name: Show logs on failure
+        if: failure() || cancelled()
+        run: |
+          echo "AddressSanitizer test failed"
+          go env

@@ -61,6 +61,15 @@ package wolfSSL
 // static WOLFSSL_ASN1_OBJECT* wolfSSL_OBJ_txt2obj(const char* s, int no_name) { return NULL; }
 // static int wolfSSL_OBJ_cmp(const WOLFSSL_ASN1_OBJECT* a, const WOLFSSL_ASN1_OBJECT* b) { return -174; }
 // #endif
+// /* When OPENSSL_ALL is on the header declares wolfSSL_OBJ_txt2obj, but the
+//  * implementation in src/ssl.c is gated by WOLFSSL_CERT_EXT && WOLFSSL_CERT_GEN.
+//  * Provide a fallback so configs without certext/certgen still link. */
+// #if defined(OPENSSL_ALL) && (!defined(WOLFSSL_CERT_EXT) || !defined(WOLFSSL_CERT_GEN))
+// WOLFSSL_ASN1_OBJECT* wolfSSL_OBJ_txt2obj(const char* s, int no_name) {
+//      (void)s; (void)no_name;
+//      return NULL; /* OBJ_txt2obj returns a pointer; NULL is its error sentinel. */
+// }
+// #endif
 // /* Helper to fetch the ASN1_TIME-printed string for NotBefore/NotAfter via
 //  * a temporary BIO. Returns length written (<= outSz) or 0 on error. */
 // #if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)

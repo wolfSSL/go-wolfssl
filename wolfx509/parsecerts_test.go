@@ -83,6 +83,7 @@ func TestPublicECCRawXY_RoundTripWithHandles(t *testing.T) {
 	}
 	der, err := CreateCertificate(tmpl, tmpl, k, k)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate: %v", err)
 	}
 	parsed, err := ParseCertificate(der)
@@ -122,6 +123,7 @@ func mintCert(t *testing.T, cn string) []byte {
 	}
 	der, err := CreateCertificate(tmpl, tmpl, k, k)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate(%q): %v", cn, err)
 	}
 	return der

@@ -66,6 +66,7 @@ package wolfSSL
 // #endif
 import "C"
 import (
+    "math"
     "unsafe"
 )
 
@@ -84,13 +85,13 @@ func Wc_curve25519_make_key(rng *C.struct_WC_RNG, keySize int, key *C.struct_cur
 }
 
 func Wc_curve25519_make_pub(pub, priv []byte) int {
-    if len(pub) == 0 || len(priv) == 0 { return BAD_FUNC_ARG }
+    if len(pub) == 0 || len(priv) == 0 || len(pub) > math.MaxInt32 || len(priv) > math.MaxInt32 { return BAD_FUNC_ARG }
     return int(C.wc_curve25519_make_pub(C.int(len(pub)),(*C.uchar)(unsafe.Pointer(&pub[0])),
                C.int(len(priv)), (*C.uchar)(unsafe.Pointer(&priv[0]))))
 }
 
 func Wc_curve25519_make_priv(rng *C.struct_WC_RNG, priv []byte) int {
-    if len(priv) == 0 { return BAD_FUNC_ARG }
+    if len(priv) == 0 || len(priv) > math.MaxInt32 { return BAD_FUNC_ARG }
     return int(C.wc_curve25519_make_priv(rng,
                C.int(len(priv)), (*C.uchar)(unsafe.Pointer(&priv[0]))))
 }

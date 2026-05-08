@@ -243,18 +243,26 @@ func Wc_AesGcmDecrypt(aes *C.struct_Aes, outPlain, inCipher, inIv, inAuthTag, in
 
 }
 
+// Wc_AesGcm_Appended_Tag_Encrypt encrypts inPlain and appends the GCM tag,
+// returning a slice of length exactly len(inPlain)+AES_BLOCK_SIZE. If
+// outCipher is large enough it is used as backing storage; otherwise a new
+// slice is allocated.
 func Wc_AesGcm_Appended_Tag_Encrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, inAAD []byte) ([]byte, int) {
     var outAuthTag [AES_BLOCK_SIZE]byte
     var longOutCipher []byte
 
-    if len(outCipher) < (len(inPlain) + AES_BLOCK_SIZE) {
-        longOutCipher = make([]byte, len(inPlain) + AES_BLOCK_SIZE)
+    need := len(inPlain) + AES_BLOCK_SIZE
+    if len(outCipher) < need {
+        longOutCipher = make([]byte, need)
     } else {
-        longOutCipher = outCipher[:len(inPlain) + AES_BLOCK_SIZE]
+        // Reslice to `need` so the returned cipher||tag has no gap when
+        // outCipher is oversized; reverting this re-introduces uninitialized
+        // bytes between ciphertext and tag.
+        longOutCipher = outCipher[:need]
     }
 
-    ret := Wc_AesGcmEncrypt(aes, longOutCipher[:(len(longOutCipher)-AES_BLOCK_SIZE)], inPlain, inIv, outAuthTag[:], inAAD)
-    copy(longOutCipher[(len(longOutCipher)-AES_BLOCK_SIZE):], outAuthTag[:])
+    ret := Wc_AesGcmEncrypt(aes, longOutCipher[:len(inPlain)], inPlain, inIv, outAuthTag[:], inAAD)
+    copy(longOutCipher[len(inPlain):], outAuthTag[:])
     return longOutCipher, ret
 }
 

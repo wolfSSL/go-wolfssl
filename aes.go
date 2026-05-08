@@ -139,6 +139,7 @@ package wolfSSL
 // }
 import "C"
 import (
+    "math"
     "unsafe"
 )
 
@@ -290,6 +291,12 @@ func Wc_AesGcm_Appended_Tag_Decrypt(aes *C.struct_Aes, outPlain, inCipher, inIv,
 func Wc_PBKDF2(out []byte, pwd []byte, pLen int, salt []byte, saltLen int, iter int, kLen int, typeH int) int {
     if pLen < 0 || saltLen < 0 || kLen < 0 ||
        pLen > len(pwd) || saltLen > len(salt) || kLen > len(out) {
+        return BAD_FUNC_ARG
+    }
+    if iter <= 0 || iter > math.MaxInt32 {
+        return BAD_FUNC_ARG
+    }
+    if pLen > math.MaxInt32 || saltLen > math.MaxInt32 || kLen > math.MaxInt32 {
         return BAD_FUNC_ARG
     }
     var outPtr *C.uchar

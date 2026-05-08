@@ -116,6 +116,16 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// #ifdef NO_PWDBASED
+// int wc_PBKDF2(byte* output, const byte* passwd, int pLen,
+//               const byte* salt, int sLen, int iterations,
+//               int kLen, int typeH) {
+//      (void)output; (void)passwd; (void)pLen;
+//      (void)salt; (void)sLen; (void)iterations;
+//      (void)kLen; (void)typeH;
+//      return -174;
+// }
+// #endif
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_PBKDF2_Unlocked(byte* output, const byte* passwd, int pLen,
 //                               const byte* salt, int sLen, int iterations,

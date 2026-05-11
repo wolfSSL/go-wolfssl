@@ -21,7 +21,6 @@
 package wolfx509
 
 import (
-	"bytes"
 	"encoding/asn1"
 	"unicode"
 	"unicode/utf16"
@@ -155,12 +154,3 @@ func directoryString(v asn1.RawValue) string {
 // tagUniversalString is the ASN.1 UniversalString tag, which encoding/asn1
 // has no constant for.
 const tagUniversalString = 28
-
-// equalName reports whether two Names have the same oneline representation.
-func equalName(a, b Name) bool {
-	return a.oneline == b.oneline
-}
-
-// equalRaw reports whether two raw byte slices are equal, used for
-// RawSubject/RawIssuer comparison.
-func equalRaw(a, b []byte) bool { return bytes.Equal(a, b) }

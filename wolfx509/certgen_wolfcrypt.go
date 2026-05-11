@@ -21,8 +21,8 @@
 
 package wolfx509
 
-// #cgo CFLAGS: -g -Wall -DWC_CTC_NAME_SIZE=256 -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
+// #cgo CFLAGS: -g -Wall -DWC_CTC_NAME_SIZE=256 -I/usr/include -I/usr/include/wolfssl
+// #cgo LDFLAGS: -L/usr/lib -lwolfssl -lm
 // #include <stdlib.h>
 // #include <string.h>
 // #include <wolfssl/options.h>

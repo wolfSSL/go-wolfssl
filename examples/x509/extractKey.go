@@ -42,6 +42,8 @@ func loadX509(certData []byte) *wolfSSL.WOLFSSL_X509 {
 }
 
 func main() {
+	wolfSSL.WolfSSL_Init()
+
 	leafPath := "../certs/server-ecc.pem"
 
 
@@ -98,5 +100,7 @@ func main() {
 	fmt.Println("Successfully imported ECC public key structure from DER buffer")
         
 	wolfSSL.Wc_ecc_free(&pubKey)
+
+	wolfSSL.WolfSSL_Cleanup()
 }
 

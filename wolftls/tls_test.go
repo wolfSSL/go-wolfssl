@@ -1139,6 +1139,10 @@ func TestConcurrentReadWrite(t *testing.T) {
 	cli, srv, cleanup := setupPair(t)
 	defer cleanup()
 
+	if cli.sslWrite == cli.ssl {
+		t.Skip("wolfSSL built without HAVE_WRITE_DUP; concurrent Read+Write serialized")
+	}
+
 	const messages = 100
 	const msgSize = 512
 

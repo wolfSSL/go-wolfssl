@@ -87,9 +87,15 @@ type Conn struct {
 	// a past deadline on c.conn.
 	mu sync.RWMutex
 
+	// muRead/muWrite serialize wolfSSL_read/wolfSSL_write. Aliased to the
+	// same mutex when HAVE_WRITE_DUP unavailable.
+	muRead  *sync.Mutex
+	muWrite *sync.Mutex
+
 	// wolfSSL objects — created during handshake
-	ctx  *wolfSSL.WOLFSSL_CTX
-	ssl  *wolfSSL.WOLFSSL
+	ctx      *wolfSSL.WOLFSSL_CTX
+	ssl      *wolfSSL.WOLFSSL
+	sslWrite *wolfSSL.WOLFSSL // == ssl when HAVE_WRITE_DUP unavailable
 
 	// callback registration IDs (0 = none)
 	ioConnID      int
@@ -402,6 +408,19 @@ func (c *Conn) doHandshake() error {
 		}
 	}
 
+	// Split off a write-only WOLFSSL when HAVE_WRITE_DUP is built in;
+	// otherwise fall back to a single mutex serializing Read and Write.
+	if dup := wolfSSL.WolfSSL_write_dup(c.ssl); dup != nil {
+		c.sslWrite = dup
+		c.muRead = &sync.Mutex{}
+		c.muWrite = &sync.Mutex{}
+	} else {
+		c.sslWrite = c.ssl
+		shared := &sync.Mutex{}
+		c.muRead = shared
+		c.muWrite = shared
+	}
+
 	return nil
 }
 
@@ -462,6 +481,8 @@ func (c *Conn) Read(b []byte) (int, error) {
 	if c.ssl == nil {
 		return 0, net.ErrClosed
 	}
+	c.muRead.Lock()
+	defer c.muRead.Unlock()
 	n := wolfSSL.WolfSSL_read(c.ssl, b, uintptr(len(b)))
 	if n > 0 {
 		return n, nil
@@ -490,14 +511,16 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.ssl == nil {
+	if c.sslWrite == nil {
 		return 0, net.ErrClosed
 	}
+	c.muWrite.Lock()
+	defer c.muWrite.Unlock()
 	total := 0
 	for total < len(b) {
-		n := wolfSSL.WolfSSL_write(c.ssl, b[total:], uintptr(len(b)-total))
+		n := wolfSSL.WolfSSL_write(c.sslWrite, b[total:], uintptr(len(b)-total))
 		if n <= 0 {
-			errCode := wolfSSL.WolfSSL_get_error(c.ssl, n)
+			errCode := wolfSSL.WolfSSL_get_error(c.sslWrite, n)
 			errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 			return total, fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
 		}
@@ -602,10 +625,18 @@ func (c *Conn) freeSSLLocked() {
 		if c.conn != nil {
 			c.conn.SetDeadline(time.Now().Add(100 * time.Millisecond))
 		}
-		wolfSSL.WolfSSL_shutdown(c.ssl)
+		shutdownSSL := c.ssl
+		if c.sslWrite != nil {
+			shutdownSSL = c.sslWrite
+		}
+		wolfSSL.WolfSSL_shutdown(shutdownSSL)
 		if c.conn != nil {
 			c.conn.SetDeadline(time.Time{}) // clear deadline
 		}
+		if c.sslWrite != nil && c.sslWrite != c.ssl {
+			wolfSSL.WolfSSL_free(c.sslWrite)
+		}
+		c.sslWrite = nil
 		wolfSSL.WolfSSL_free(c.ssl)
 		c.ssl = nil
 	}

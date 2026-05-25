@@ -9,7 +9,7 @@ To use the wolfSSL go module, first build and install wolfSSL as shown below.
 ```
 git clone https://github.com/wolfSSL/wolfssl
 ./autogen.sh
-./configure
+./configure --enable-writedup
 make
 sudo make install
 ``` 

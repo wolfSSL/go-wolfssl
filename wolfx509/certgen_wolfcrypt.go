@@ -87,6 +87,8 @@ const (
 	wcExtKeyUsageClientAuth  = 0x04
 	wcExtKeyUsageCodeSigning = 0x08
 	wcExtKeyUsageEmailProt   = 0x10
+	wcExtKeyUsageTimestamp   = 0x20
+	wcExtKeyUsageOCSPSign    = 0x40
 )
 
 // sigTypeFor maps a key algorithm to its wolfCrypt CTC_* sigType.

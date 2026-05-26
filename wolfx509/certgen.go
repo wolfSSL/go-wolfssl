@@ -217,6 +217,10 @@ func translateExtKeyUsage(uses []ExtKeyUsage) int {
 			out |= wcExtKeyUsageCodeSigning
 		case ExtKeyUsageEmailProtection:
 			out |= wcExtKeyUsageEmailProt
+		case ExtKeyUsageTimeStamping:
+			out |= wcExtKeyUsageTimestamp
+		case ExtKeyUsageOCSPSigning:
+			out |= wcExtKeyUsageOCSPSign
 		}
 	}
 	return out

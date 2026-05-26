@@ -560,6 +560,8 @@ func (c *Conn) Close() error {
 
 // LocalAddr returns the local network address of the underlying connection.
 func (c *Conn) LocalAddr() net.Addr {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.conn == nil {
 		return nil
 	}
@@ -568,6 +570,8 @@ func (c *Conn) LocalAddr() net.Addr {
 
 // RemoteAddr returns the remote network address of the underlying connection.
 func (c *Conn) RemoteAddr() net.Addr {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.conn == nil {
 		return nil
 	}
@@ -577,6 +581,8 @@ func (c *Conn) RemoteAddr() net.Addr {
 // SetDeadline sets the read and write deadlines on the underlying connection.
 // wolfSSL will observe these via the file descriptor's socket timeout.
 func (c *Conn) SetDeadline(t time.Time) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.conn == nil {
 		return errors.New("wolftls: connection closed")
 	}
@@ -585,6 +591,8 @@ func (c *Conn) SetDeadline(t time.Time) error {
 
 // SetReadDeadline sets the read deadline on the underlying connection.
 func (c *Conn) SetReadDeadline(t time.Time) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.conn == nil {
 		return errors.New("wolftls: connection closed")
 	}
@@ -593,6 +601,8 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 
 // SetWriteDeadline sets the write deadline on the underlying connection.
 func (c *Conn) SetWriteDeadline(t time.Time) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.conn == nil {
 		return errors.New("wolftls: connection closed")
 	}
@@ -601,6 +611,8 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 
 // NetConn returns the underlying net.Conn, or nil if the connection is closed.
 func (c *Conn) NetConn() net.Conn {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if rc, ok := c.conn.(*recordingConn); ok {
 		return rc.Conn
 	}

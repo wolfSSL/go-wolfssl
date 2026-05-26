@@ -9,10 +9,14 @@ To use the wolfSSL go module, first build and install wolfSSL as shown below.
 ```
 git clone https://github.com/wolfSSL/wolfssl
 ./autogen.sh
-./configure --enable-writedup
+./configure
 make
 sudo make install
 ``` 
+
+If you plan to use the `wolftls` subpackage and need concurrent `Read` and
+`Write` on a single `Conn` to run in parallel, add `--enable-writedup` to the
+`./configure` line above. Otherwise, the calls will be serialized.
 
 Then clone the go-wolfssl repo and run the `./generateOptions.sh` script to customize go-wolfssl to the same feature set as wolfSSL. This script will generate an `options.go` file that will keep go-wolfssl and wolfSSL in sync. `generateOptions` should be run any time you change your wolfSSL configure options. If the path to your wolfSSL directory is `../wolfssl`, just run:
 ```

@@ -36,6 +36,9 @@ package wolfSSL
 // int wc_Sha256Final(wc_Sha256* sha, byte* hash) {
 //      return -174;
 // }
+// int wc_Sha256Copy(wc_Sha256* src, wc_Sha256* dst) {
+//      return -174;
+// }
 // #endif
 import "C"
 import (

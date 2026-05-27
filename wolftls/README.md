@@ -15,3 +15,9 @@ whose entire handshake and record I/O runs through wolfSSL.
 - Per-connection callbacks: SNI (`Config.GetCertificate` /
   `GetConfigForClient`) and cert-setup; trampolines and Go I/O
   bridging are implemented in `callbacks.go`.
+
+## Build requirements
+
+Running `Read` and `Write` concurrently on a single `Conn` requires wolfSSL
+built with `--enable-writedup`; otherwise the two calls will serialize on a
+shared mutex.

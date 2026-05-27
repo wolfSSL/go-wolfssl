@@ -20,7 +20,7 @@
 
 package wolfx509
 
-// #cgo CFLAGS: -g -Wall -DWC_CTC_NAME_SIZE=256 -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
+// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
 // #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <stdlib.h>
 // #include <string.h>
@@ -86,6 +86,8 @@ const (
 	wcExtKeyUsageClientAuth  = 0x04
 	wcExtKeyUsageCodeSigning = 0x08
 	wcExtKeyUsageEmailProt   = 0x10
+	wcExtKeyUsageTimestamp   = 0x20
+	wcExtKeyUsageOCSPSign    = 0x40
 )
 
 // sigTypeFor maps a key algorithm to its wolfCrypt CTC_* sigType.

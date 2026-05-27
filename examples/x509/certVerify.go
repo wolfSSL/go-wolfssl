@@ -41,6 +41,8 @@ func loadX509(certData []byte) *wolfSSL.WOLFSSL_X509 {
 }
 
 func main() {
+	wolfSSL.WolfSSL_Init()
+
 	caPath   := "../certs/ca-cert.pem"
 	int1Path := "../certs/ca-int-cert.pem"
 	int2Path := "../certs/ca-int2-cert.pem"
@@ -116,5 +118,7 @@ func main() {
 	}
 
 	fmt.Println("Certificate chain verified successfully.")
+
+	wolfSSL.WolfSSL_Cleanup()
 }
 

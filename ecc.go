@@ -80,6 +80,27 @@ package wolfSSL
 //                          byte* out, word32* outlen) {
 //      return -174;
 //  }
+// int wc_ecc_export_public_raw(ecc_key* key, byte* qx, word32* qxLen,
+//                              byte* qy, word32* qyLen) {
+//      return -174;
+//  }
+// int wc_EccPrivateKeyDecode(const byte* input, word32* inOutIdx,
+//                            ecc_key* key, word32 inSz) {
+//      return -174;
+//  }
+// int wc_EccKeyToDer(ecc_key* key, byte* output, word32 inLen) {
+//      return -174;
+//  }
+// int wc_EccPrivateKeyToDer(ecc_key* key, byte* output, word32 inLen) {
+//      return -174;
+//  }
+// int wc_EccKeyToPKCS8(ecc_key* key, byte* output, word32* outLen) {
+//      return -174;
+//  }
+// int wc_EccPublicKeyToDer(ecc_key* key, byte* output, word32 inLen,
+//                          int with_AlgCurve) {
+//      return -174;
+//  }
 // #endif
 //
 // /* Negate an ECC private key: d' = order - d, then regenerate the public key */

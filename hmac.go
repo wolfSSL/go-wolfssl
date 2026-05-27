@@ -22,7 +22,28 @@ package wolfSSL
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hmac.h>
-// #ifdef _WIN32
+// #ifdef NO_HMAC
+// typedef struct Hmac {} Hmac;
+// int wc_HmacInit(Hmac* hmac, void* heap, int devId) {
+//      (void)hmac; (void)heap; (void)devId;
+//      return -174;
+// }
+// void wc_HmacFree(Hmac* hmac) { (void)hmac; }
+// int wc_HmacSetKey(Hmac* hmac, int type, const byte* key, word32 keySz) {
+//      (void)hmac; (void)type; (void)key; (void)keySz;
+//      return -174;
+// }
+// int wc_HmacUpdate(Hmac* hmac, const byte* msg, word32 length) {
+//      (void)hmac; (void)msg; (void)length;
+//      return -174;
+// }
+// int wc_HmacFinal(Hmac* hmac, byte* hash) {
+//      (void)hmac; (void)hash;
+//      return -174;
+// }
+// Hmac* wc_HmacAllocAligned(void) { return NULL; }
+// void wc_HmacFreeAllocAligned(Hmac* ptr) { (void)ptr; }
+// #elif defined(_WIN32)
 // #include <stdlib.h>
 // #include <malloc.h>
 // Hmac* wc_HmacAllocAligned(void) {
@@ -43,6 +64,17 @@ package wolfSSL
 // }
 // void wc_HmacFreeAllocAligned(Hmac* ptr) {
 //     free(ptr);
+// }
+// #endif
+// #if defined(NO_HMAC) || !defined(HAVE_HKDF)
+// int wc_HKDF(int type, const byte* inKey, word32 inKeySz,
+//             const byte* salt, word32 saltSz,
+//             const byte* info, word32 infoSz,
+//             byte* out, word32 outSz) {
+//      (void)type; (void)inKey; (void)inKeySz;
+//      (void)salt; (void)saltSz; (void)info; (void)infoSz;
+//      (void)out; (void)outSz;
+//      return -174;
 // }
 // #endif
 import "C"

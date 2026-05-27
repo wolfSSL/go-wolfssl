@@ -26,6 +26,7 @@ package wolfSSL
 // #ifndef HAVE_CURVE25519
 // typedef struct curve25519_key {} curve25519_key;
 // #define EC25519_LITTLE_ENDIAN 1
+// #define CURVE25519_KEYSIZE 32
 // int wc_curve25519_init(curve25519_key* key) {
 //     return -174;
 // }
@@ -66,10 +67,13 @@ package wolfSSL
 // #endif
 import "C"
 import (
+    "math"
     "unsafe"
 )
 
 type Curve25519_key = C.struct_curve25519_key
+
+const CURVE25519_KEYSIZE = int(C.CURVE25519_KEYSIZE)
 
 func Wc_curve25519_init(key *C.struct_curve25519_key) int {
     return int(C.wc_curve25519_init(key))
@@ -84,13 +88,13 @@ func Wc_curve25519_make_key(rng *C.struct_WC_RNG, keySize int, key *C.struct_cur
 }
 
 func Wc_curve25519_make_pub(pub, priv []byte) int {
-    if len(pub) == 0 || len(priv) == 0 { return BAD_FUNC_ARG }
+    if len(pub) == 0 || len(priv) == 0 || len(pub) > math.MaxInt32 || len(priv) > math.MaxInt32 { return BAD_FUNC_ARG }
     return int(C.wc_curve25519_make_pub(C.int(len(pub)),(*C.uchar)(unsafe.Pointer(&pub[0])),
                C.int(len(priv)), (*C.uchar)(unsafe.Pointer(&priv[0]))))
 }
 
 func Wc_curve25519_make_priv(rng *C.struct_WC_RNG, priv []byte) int {
-    if len(priv) == 0 { return BAD_FUNC_ARG }
+    if len(priv) == 0 || len(priv) > math.MaxInt32 { return BAD_FUNC_ARG }
     return int(C.wc_curve25519_make_priv(rng,
                C.int(len(priv)), (*C.uchar)(unsafe.Pointer(&priv[0]))))
 }
@@ -108,14 +112,16 @@ func Wc_curve25519_import_public(pub []byte, key *C.struct_curve25519_key) int {
 }
 
 func Wc_curve25519_export_private_raw(key *C.struct_curve25519_key, priv []byte) int {
-    if len(priv) == 0 { return BAD_FUNC_ARG }
-    cOutLen := C.word32(len(priv))
+    if len(priv) < CURVE25519_KEYSIZE { return BAD_FUNC_ARG }
+    // Pin cOutLen to KEYSIZE so C writes exactly 32 bytes regardless of buffer size.
+    cOutLen := C.word32(CURVE25519_KEYSIZE)
     return int(C.wc_curve25519_export_private_raw(key, (*C.uchar)(unsafe.Pointer(&priv[0])), &cOutLen))
 }
 
 func Wc_curve25519_shared_secret(privKey, pubKey *C.struct_curve25519_key, out []byte) int {
-    if len(out) == 0 { return BAD_FUNC_ARG }
-    cOutLen := C.word32(len(out))
+    if len(out) < CURVE25519_KEYSIZE { return BAD_FUNC_ARG }
+    // Pin cOutLen to KEYSIZE so C writes exactly 32 bytes regardless of buffer size.
+    cOutLen := C.word32(CURVE25519_KEYSIZE)
     return int(C.wc_curve25519_shared_secret_ex(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])),
                &cOutLen, C.EC25519_LITTLE_ENDIAN))
 }

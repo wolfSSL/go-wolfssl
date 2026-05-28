@@ -135,6 +135,28 @@ type Ecc_key = C.struct_ecc_key
 
 const ECC_SECP256R1 = int(C.ECC_SECP256R1)
 
+// Wc_Ecc_AllocKey returns a zero-initialized ecc_key on the C heap. C-heap
+// allocation avoids the same cgo pointer-check hazard documented on
+// Wc_Curve25519_AllocKey. Pair with Wc_Ecc_FreeKey for cleanup.
+func Wc_Ecc_AllocKey() *C.struct_ecc_key {
+	p := C.calloc(1, C.size_t(C.sizeof_struct_ecc_key))
+	if p == nil {
+		return nil
+	}
+	return (*C.struct_ecc_key)(p)
+}
+
+// Wc_Ecc_FreeKey releases internal wolfSSL state (via wc_ecc_free) and the
+// C-heap allocation. Safe to call after Wc_ecc_init returned an error or
+// notCompiledIn (the key is still zeroed).
+func Wc_Ecc_FreeKey(key *C.struct_ecc_key) {
+	if key == nil {
+		return
+	}
+	C.wc_ecc_free(key)
+	C.free(unsafe.Pointer(key))
+}
+
 func Wc_ecc_init(key *C.struct_ecc_key) int {
     return int(C.wc_ecc_init(key))
 }

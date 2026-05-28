@@ -20,6 +20,7 @@
 
 package wolfSSL
 
+// #include <stdlib.h>
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/curve25519.h>
 // #include <wolfssl/wolfcrypt/random.h>
@@ -70,6 +71,31 @@ import (
 )
 
 type Curve25519_key = C.struct_curve25519_key
+
+// Wc_Curve25519_AllocKey returns a zero-initialized curve25519_key on the C heap.
+// wolfSSL populates pointer-typed fields (dp, heap) during init/make_key; in
+// some configures (observed under --enable-tls13 --enable-curve25519) those
+// values fall in Go's heap range and cgo's runtime pointer check panics with
+// "Go pointer to unpinned Go pointer" if the struct lives on Go's heap. C-heap
+// allocation avoids it. Pair with Wc_Curve25519_FreeKey.
+func Wc_Curve25519_AllocKey() *C.struct_curve25519_key {
+	p := C.calloc(1, C.size_t(C.sizeof_struct_curve25519_key))
+	if p == nil {
+		return nil
+	}
+	return (*C.struct_curve25519_key)(p)
+}
+
+// Wc_Curve25519_FreeKey releases internal wolfSSL state (via wc_curve25519_free)
+// and the C-heap allocation. Safe to call after Wc_curve25519_init returned an
+// error or notCompiledIn (the key is still zeroed).
+func Wc_Curve25519_FreeKey(key *C.struct_curve25519_key) {
+	if key == nil {
+		return
+	}
+	C.wc_curve25519_free(key)
+	C.free(unsafe.Pointer(key))
+}
 
 func Wc_curve25519_init(key *C.struct_curve25519_key) int {
     return int(C.wc_curve25519_init(key))

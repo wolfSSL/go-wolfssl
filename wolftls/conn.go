@@ -38,6 +38,10 @@ import (
 	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 
+// ErrNotCompiledIn is returned (wrapped) when a feature wolftls tried to use
+// is not compiled into the linked wolfSSL library.
+var ErrNotCompiledIn = errors.New("wolftls: feature not compiled in wolfSSL")
+
 // recordingConn wraps the underlying net.Conn so wolftls.Conn.Read can
 // recover the original Go-side Read error after wolfSSL has reduced it to
 // an error code. net/http's hijack-via-SetReadDeadline path expects Read to
@@ -365,6 +369,9 @@ func (c *Conn) doHandshake() error {
 			wolfSSL.WOLFSSL_ALPN_FAILED_ON_MISMATCH)
 		if ret != wolfSSL.WOLFSSL_SUCCESS {
 			c.freeSSL()
+			if ret == wolfSSL.NOT_COMPILED_IN {
+				return fmt.Errorf("wolftls: failed to set ALPN: %w", ErrNotCompiledIn)
+			}
 			return fmt.Errorf("wolftls: failed to set ALPN (%d)", ret)
 		}
 	}

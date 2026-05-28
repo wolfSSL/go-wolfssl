@@ -21,6 +21,8 @@ jobs:
         go_version: [ '1.21', '1.22', '1.23' ]
         wolfssl_configure: [
           '--enable-all --enable-opensslall --enable-opensslextra',
+          '--enable-tls13 --enable-curve25519 --enable-chacha --enable-poly1305 --enable-opensslall --enable-opensslextra',
+          '--enable-dtls --enable-dtls13 --enable-opensslall --enable-opensslextra',
         ]
     name: ${{ matrix.os }} (Go ${{ matrix.go_version }}, ${{ matrix.wolfssl_configure}})
     if: github.repository_owner == 'wolfssl'
@@ -43,7 +45,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/wolfssl-install
-          key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}-${{ matrix.wolfssl_configure }}
 
       - name: Build native wolfSSL
         if: steps.cache-wolfssl.outputs.cache-hit != 'true'
@@ -61,16 +63,19 @@ jobs:
           sudo cp -r /tmp/wolfssl-install/include/* /usr/local/include/
           sudo ldconfig
 
-      - name: Install Go dependencies
+      - name: Verify go.mod / go.sum integrity
         run: |
-          go get golang.org/x/term
-          go mod tidy
+          go mod download
+          go mod verify
 
       - name: Build go-wolfssl library
-        run: go build .
+        run: go build . ./handles ./wolftls ./wolfx509
 
       - name: Run go vet
         run: go vet .
+
+      - name: Run unit tests
+        run: go test -count=1 -timeout=120s . ./handles ./wolftls ./wolfx509
 
       - name: Build examples
         run: |

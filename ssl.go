@@ -109,6 +109,28 @@ package wolfSSL
 //      return 0;
 // }
 // #endif
+// #ifndef HAVE_ALPN
+// int wolfSSL_UseALPN(WOLFSSL* ssl, char* protocol_name_list,
+//                     unsigned int protocol_name_listSz, unsigned char options) {
+//      (void)ssl; (void)protocol_name_list;
+//      (void)protocol_name_listSz; (void)options;
+//      return NOT_COMPILED_IN;
+// }
+// int wolfSSL_ALPN_GetProtocol(WOLFSSL* ssl, char** protocol_name,
+//                              unsigned short* size) {
+//      (void)ssl; (void)protocol_name; (void)size;
+//      return NOT_COMPILED_IN;
+// }
+// int wolfSSL_ALPN_GetPeerProtocol(WOLFSSL* ssl, char** list,
+//                                  unsigned short* listSz) {
+//      (void)ssl; (void)list; (void)listSz;
+//      return NOT_COMPILED_IN;
+// }
+// int wolfSSL_ALPN_FreePeerProtocol(WOLFSSL* ssl, char** list) {
+//      (void)ssl; (void)list;
+//      return NOT_COMPILED_IN;
+// }
+// #endif
 import "C"
 import (
     "unsafe"

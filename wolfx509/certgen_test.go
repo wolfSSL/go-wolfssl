@@ -42,6 +42,7 @@ func TestCreateSelfSignedBasic(t *testing.T) {
 	}
 	der, err := CreateCertificate(tmpl, tmpl, k, k)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate: %v", err)
 	}
 	if len(der) == 0 {
@@ -90,6 +91,7 @@ func TestCreateSelfSignedWithSANs(t *testing.T) {
 	}
 	der, err := CreateCertificate(tmpl, tmpl, k, k)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate: %v", err)
 	}
 
@@ -168,6 +170,7 @@ func TestCreateCASignedCert(t *testing.T) {
 	}
 	caDER, err := CreateCertificate(caTmpl, caTmpl, caKey, caKey)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate (CA): %v", err)
 	}
 	caCert, err := ParseCertificate(caDER)
@@ -194,6 +197,7 @@ func TestCreateCASignedCert(t *testing.T) {
 	}
 	leafDER, err := CreateCertificate(leafTmpl, caCert, leafKey, caKey)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificate (CA-signed leaf): %v", err)
 	}
 	leafCert, err := ParseCertificate(leafDER)
@@ -235,6 +239,7 @@ func TestCreateCertificateRequest(t *testing.T) {
 	}
 	der, err := CreateCertificateRequest(tmpl, k)
 	if err != nil {
+		skipIfCertGenMissing(t, err)
 		t.Fatalf("CreateCertificateRequest: %v", err)
 	}
 	if len(der) == 0 {

@@ -41,14 +41,37 @@ package wolfx509
 // static int wc_MakeCertReq(Cert* cert, byte* derBuffer, word32 derSz,
 //                            RsaKey* rsaKey, ecc_key* eccKey) {
 //     (void)cert; (void)derBuffer; (void)derSz; (void)rsaKey; (void)eccKey;
-//     return -174;
+//     return NOT_COMPILED_IN;
 // }
 // #endif
 // #ifndef WOLFSSL_ACME_OID
-// static int wc_SetAcmeIdentifierExt(Cert* cert, const char* keyAuth,
-//                                     int keyAuthSz) {
+// static int wc_SetAcmeIdentifierExt(Cert* cert, const byte* keyAuth,
+//                                     word32 keyAuthSz) {
 //     (void)cert; (void)keyAuth; (void)keyAuthSz;
-//     return -174;
+//     return NOT_COMPILED_IN;
+// }
+// #endif
+// /* The wolfSSL header declares these unconditionally but the implementations
+//  * in src/asn.c are gated on WOLFSSL_CERT_GEN. Provide stubs so wolfx509
+//  * links cleanly against builds without --enable-certgen. */
+// #ifndef WOLFSSL_CERT_GEN
+// int wc_InitCert(Cert* cert) {
+//     (void)cert; return NOT_COMPILED_IN;
+// }
+// int wc_MakeCert(Cert* cert, byte* derBuffer, word32 derSz,
+//                 RsaKey* rsaKey, ecc_key* eccKey, WC_RNG* rng) {
+//     (void)cert; (void)derBuffer; (void)derSz;
+//     (void)rsaKey; (void)eccKey; (void)rng;
+//     return NOT_COMPILED_IN;
+// }
+// int wc_SignCert(int requestSz, int sType, byte* buf, word32 buffSz,
+//                 RsaKey* rsaKey, ecc_key* eccKey, WC_RNG* rng) {
+//     (void)requestSz; (void)sType; (void)buf; (void)buffSz;
+//     (void)rsaKey; (void)eccKey; (void)rng;
+//     return NOT_COMPILED_IN;
+// }
+// int wc_SetIssuerBuffer(Cert* cert, const byte* der, int derSz) {
+//     (void)cert; (void)der; (void)derSz; return NOT_COMPILED_IN;
 // }
 // #endif
 import "C"
@@ -63,6 +86,11 @@ import (
 )
 
 // TODO: Remove "encoding/asn1" and replace with wolfSSL ASN parsing
+
+// ErrNotCompiledIn is returned by CreateCertificate / CreateCertificateRequest
+// when wolfSSL was built without --enable-certgen (or related cert-handling
+// features), so the underlying wolfCrypt symbols return NOT_COMPILED_IN.
+var ErrNotCompiledIn = errors.New("wolfx509: cert generation not compiled in")
 
 // Key usage bits (RFC 5280) in wolfCrypt's KEYUSE_* layout. These are
 // the values consumed by wc_MakeCert; translateKeyUsage maps from the
@@ -171,6 +199,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 
 	var cert C.Cert
 	if ret := int(C.wc_InitCert(&cert)); ret != 0 {
+		if ret == int(C.NOT_COMPILED_IN) {
+			return nil, ErrNotCompiledIn
+		}
 		return nil, fmt.Errorf("wolfCrypt: wc_InitCert: %d", ret)
 	}
 	cert.version = 2
@@ -210,6 +241,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	if len(parentDER) > 0 {
 		if ret := int(C.wc_SetIssuerBuffer(&cert,
 			(*C.byte)(unsafe.Pointer(&parentDER[0])), C.int(len(parentDER)))); ret != 0 {
+			if ret == int(C.NOT_COMPILED_IN) {
+				return nil, ErrNotCompiledIn
+			}
 			return nil, fmt.Errorf("wolfCrypt: wc_SetIssuerBuffer: %d", ret)
 		}
 	}
@@ -218,6 +252,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 		if ret := int(C.wc_SetAcmeIdentifierExt(&cert,
 			(*C.byte)(unsafe.Pointer(&opts.AcmeKeyAuth[0])),
 			C.word32(len(opts.AcmeKeyAuth)))); ret != 0 {
+			if ret == int(C.NOT_COMPILED_IN) {
+				return nil, ErrNotCompiledIn
+			}
 			return nil, fmt.Errorf("wolfCrypt: wc_SetAcmeIdentifierExt: %d", ret)
 		}
 	}
@@ -239,6 +276,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 			bodySz = int(C.wc_MakeCert(&cert, derPtr, derCap, nil, pubEcc, pubRng))
 		}
 		if bodySz < 0 {
+			if bodySz == int(C.NOT_COMPILED_IN) {
+				return nil, ErrNotCompiledIn
+			}
 			return nil, fmt.Errorf("wolfCrypt: body build failed: %d", bodySz)
 		}
 		signedSz = int(C.wc_SignCert(cert.bodySz, cert.sigType, derPtr, derCap,
@@ -248,6 +288,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 			pubKey.Algorithm())
 	}
 	if signedSz < 0 {
+		if signedSz == int(C.NOT_COMPILED_IN) {
+			return nil, ErrNotCompiledIn
+		}
 		return nil, fmt.Errorf("wolfCrypt: wc_SignCert: %d", signedSz)
 	}
 	return derOut[:signedSz], nil

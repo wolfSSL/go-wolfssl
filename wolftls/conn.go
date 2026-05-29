@@ -164,6 +164,11 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 
 // doHandshake performs the actual handshake. Must be called with handshakeMu held.
 func (c *Conn) doHandshake() error {
+	// Reject a ServerName containing a NUL byte
+	if strings.IndexByte(c.config.ServerName, 0) >= 0 {
+		return errors.New("wolftls: ServerName contains NUL byte")
+	}
+
 	// Create CTX with version-flexible method
 	if c.isClient {
 		c.ctx = wolfSSL.WolfSSL_CTX_new_v23_client()

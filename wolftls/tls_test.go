@@ -29,6 +29,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -571,11 +572,16 @@ func TestVerifyHostnameMismatch(t *testing.T) {
 	tlsConn := Client(conn, clientConfig)
 	defer tlsConn.Close()
 
-	if err := tlsConn.Handshake(); err == nil {
+	err = tlsConn.Handshake()
+	if err == nil {
 		t.Fatal("handshake should fail: cert SAN does not cover ServerName")
-	} else {
-		t.Logf("expected hostname-mismatch failure: %v", err)
 	}
+	// Assert the failure is the hostname check rejecting the leaf cert
+	// during the handshake
+	if !strings.Contains(err.Error(), "-322") {
+		t.Fatalf("expected DOMAIN_NAME_MISMATCH (-322) hostname-verification failure, got: %v", err)
+	}
+	t.Logf("expected hostname-mismatch failure: %v", err)
 
 	// Server side may also error from the client's alert — that's fine.
 	<-errc

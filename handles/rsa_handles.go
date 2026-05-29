@@ -98,6 +98,20 @@ func ImportRsaPublicRaw(n, e []byte) (*RsaKey, error) {
     return k, nil
 }
 
+// checkDigestLen ensures the supplied digest matches the output size of
+// hashType
+func checkDigestLen(op string, hashType int, digest []byte) error {
+    sz := wolfSSL.Wc_HashGetDigestSize(hashType)
+    if sz <= 0 {
+        return fmt.Errorf("handles: %s: unsupported hashType %d", op, hashType)
+    }
+    if len(digest) != sz {
+        return fmt.Errorf("handles: %s: digest length %d does not match hashType %d (expected %d)",
+            op, len(digest), hashType, sz)
+    }
+    return nil
+}
+
 // RsaVerifyPSS verifies an RSASSA-PSS signature using
 // MGF1 with the same hash family as hashType. saltLen is fixed at
 // hashLen.
@@ -107,6 +121,9 @@ func RsaVerifyPSS(pub *RsaKey, hashType int, digest, sig []byte) error {
     }
     if len(digest) == 0 || len(sig) == 0 {
         return errors.New("handles: RsaVerifyPSS: empty digest or sig")
+    }
+    if err := checkDigestLen("RsaVerifyPSS", hashType, digest); err != nil {
+        return err
     }
     var mgf int
     switch hashType {
@@ -134,6 +151,9 @@ func RsaVerifyPKCS1v15(pub *RsaKey, hashType int, digest, sig []byte) error {
     }
     if len(digest) == 0 || len(sig) == 0 {
         return errors.New("handles: RsaVerifyPKCS1v15: empty digest or sig")
+    }
+    if err := checkDigestLen("RsaVerifyPKCS1v15", hashType, digest); err != nil {
+        return err
     }
     hashOID := wolfSSL.Wc_HashGetOID(hashType)
     if hashOID < 0 {

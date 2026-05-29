@@ -58,6 +58,9 @@ package wolfSSL
 // #if defined(NO_ASN) && defined(NO_DH) && !defined(HAVE_ECC)
 // int wc_HashGetOID(enum wc_HashType hash_type) { (void)hash_type; return -174; }
 // #endif
+// #ifdef NO_HASH_WRAPPER
+// int wc_HashGetDigestSize(enum wc_HashType hash_type) { (void)hash_type; return -174; }
+// #endif
 // #if !defined(NO_RSA) && !defined(WOLFSSL_KEY_GEN)
 // int wc_MakeRsaKey(RsaKey* key, int size, long e, WC_RNG* rng) {
 //     (void)key; (void)size; (void)e; (void)rng; return -174;
@@ -157,6 +160,13 @@ const MAX_ENCODED_SIG_SZ = int(C.MAX_ENCODED_SIG_SZ)
 
 func Wc_HashGetOID(hashType int) int {
     return int(C.wc_HashGetOID(C.enum_wc_HashType(hashType)))
+}
+
+// Wc_HashGetDigestSize returns the digest output size in bytes for the
+// given hash type, or a negative wolfCrypt error code if the hash type
+// is unsupported.
+func Wc_HashGetDigestSize(hashType int) int {
+    return int(C.wc_HashGetDigestSize(C.enum_wc_HashType(hashType)))
 }
 
 func Wc_EncodeSignature(out []byte, digest []byte, hashOID int) int {

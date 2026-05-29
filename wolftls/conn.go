@@ -432,7 +432,17 @@ func (c *Conn) cleanup() {
 // buildConnectionState populates c.connState from the wolfSSL session.
 func (c *Conn) buildConnectionState() error {
 	c.connState.HandshakeComplete = true
-	c.connState.ServerName = c.config.ServerName
+	if c.isClient {
+		// Client: SNI is what we sent; mirror the value from config.
+		c.connState.ServerName = c.config.ServerName
+	} else {
+		// Server: SNI is what the client sent in its ClientHello; query
+		// the wolfSSL session. Required for server-side dispatch logic
+		// that reads ConnectionState().ServerName (e.g., net/http's
+		// r.TLS.ServerName, which downstream handlers use for per-host
+		// routing).
+		c.connState.ServerName = wolfSSL.WolfSSL_SNI_GetServerName(c.ssl)
+	}
 
 	// TLS version
 	versionStr := wolfSSL.WolfSSL_get_version(c.ssl)

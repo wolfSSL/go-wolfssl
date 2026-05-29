@@ -38,33 +38,45 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
 
-      - name: Cache wolfSSL build
+      - name: Cache wolfSSL builds
         id: cache-wolfssl
         uses: actions/cache@v4
         with:
-          path: /tmp/wolfssl-install
+          path: |
+            /tmp/wolfssl-install-all
+            /tmp/wolfssl-install-default
           key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
 
-      - name: Build native wolfSSL
+      - name: Build native wolfSSL (full + default configs, single clone)
         if: steps.cache-wolfssl.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 https://github.com/wolfSSL/wolfssl.git /tmp/wolfssl
           cd /tmp/wolfssl
           ./autogen.sh
-          ./configure --prefix=/tmp/wolfssl-install ${{ matrix.wolfssl_configure }}
+          # Full-featured config — drives the build/vet/examples checks below.
+          ./configure --prefix=/tmp/wolfssl-install-all ${{ matrix.wolfssl_configure }}
+          make -j$(nproc)
+          make install
+          # Default config (plain ./configure),
+          # rebuilt from the same checkout to exercise the #ifdef stub paths.
+          make clean
+          ./configure --prefix=/tmp/wolfssl-install-default
           make -j$(nproc)
           make install
 
-      - name: Install wolfSSL system-wide
+      - name: Install wolfSSL (full config) system-wide
         run: |
-          sudo cp -r /tmp/wolfssl-install/lib/* /usr/local/lib/
-          sudo cp -r /tmp/wolfssl-install/include/* /usr/local/include/
+          sudo cp -r /tmp/wolfssl-install-all/lib/* /usr/local/lib/
+          sudo cp -r /tmp/wolfssl-install-all/include/* /usr/local/include/
           sudo ldconfig
 
       - name: Install Go dependencies
         run: |
           go get golang.org/x/term
           go mod tidy
+
+      - name: Generate options.go (full config)
+        run: ./generateOptions.sh /usr/local
 
       - name: Build go-wolfssl library
         run: go build .
@@ -85,6 +97,38 @@ jobs:
             echo "Building $f..."
             go build "$f"
           done
+
+      - name: Run wolftls tests (full config)
+        run: go test ./wolftls
+
+      - name: Run wolfx509 tests (full config)
+        run: go test ./wolfx509
+
+      # ---- Default-config phase: validate the #ifdef stub paths against
+      # a plain ./configure wolfSSL
+      - name: Install wolfSSL (default config) system-wide
+        run: |
+          sudo rm -rf /usr/local/include/wolfssl
+          sudo cp -r /tmp/wolfssl-install-default/include/* /usr/local/include/
+          sudo cp -r /tmp/wolfssl-install-default/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Generate options.go (default config)
+        # Re-point options.go at the default-config options.h so the wrapper
+        # and library agree on which features are compiled in.
+        run: ./generateOptions.sh /usr/local
+
+      - name: Clear Go build cache
+        # The cgo objects above were compiled against the full-config headers;
+        # Go's build cache does not track system headers, so clear it to force
+        # recompilation against the default-config options.h.
+        run: go clean -cache
+
+      - name: Run go vet (default config)
+        run: go vet .
+
+      - name: Run handles tests (default config)
+        run: go test ./handles
 
       - name: Show logs on failure
         if: failure() || cancelled()

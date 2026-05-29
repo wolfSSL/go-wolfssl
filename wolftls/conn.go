@@ -357,6 +357,16 @@ func (c *Conn) doHandshake() error {
 		}
 	}
 
+	// Bind the expected hostname so wolfSSL checks the server leaf
+	// certificate's SAN/CN against it during the handshake
+	if c.isClient && c.config.ServerName != "" && !c.config.InsecureSkipVerify {
+		ret := wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			c.freeSSL()
+			return fmt.Errorf("wolftls: failed to set domain name check (%d)", ret)
+		}
+	}
+
 	// Set ALPN
 	if len(c.config.NextProtos) > 0 {
 		// wolfSSL expects a comma-separated list

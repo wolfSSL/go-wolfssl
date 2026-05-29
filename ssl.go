@@ -382,6 +382,12 @@ func WolfSSL_CTX_UseSNI(ctx *C.struct_WOLFSSL_CTX, sniType int, data []byte, siz
                unsafe.Pointer(&data[0]), C.ushort(size)))
 }
 
+func WolfSSL_check_domain_name(ssl *C.struct_WOLFSSL, dn string) int {
+    cDN := C.CString(dn)
+    defer C.free(unsafe.Pointer(cDN))
+    return int(C.wolfSSL_check_domain_name(ssl, cDN))
+}
+
 func WolfSSL_UseALPN(ssl *C.struct_WOLFSSL, protoList string, options int) int {
     c_list := C.CString(protoList)
     defer C.free(unsafe.Pointer(c_list))

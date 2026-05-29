@@ -433,7 +433,7 @@ func TestRootCAPEMsVerification(t *testing.T) {
 
 	// Client with CA loaded — wolfSSL should verify the server cert
 	clientConfig := &Config{
-		ServerName:         "localhost",
+		ServerName:         "example.com",
 		InsecureSkipVerify: false,
 		RootCAPEMs:         [][]byte{caPEM},
 	}
@@ -523,6 +523,61 @@ func TestRootCAPEMsRejectsWrongCA(t *testing.T) {
 	t.Logf("expected handshake failure: %v", err)
 
 	// Server side may also error — that's fine
+	<-errc
+}
+
+func TestVerifyHostnameMismatch(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	caPEM := loadFile(t, certPath("ca-cert.pem"))
+
+	serverConfig := &Config{
+		Certificates: []Certificate{{
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
+		}},
+	}
+
+	// Trusted chain (CA loaded), but ServerName is not in the cert's SAN
+	// (which only covers example.com / 127.0.0.1).
+	clientConfig := &Config{
+		ServerName:         "test.example.com",
+		InsecureSkipVerify: false,
+		RootCAPEMs:         [][]byte{caPEM},
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		defer tlsConn.Close()
+		errc <- tlsConn.Handshake()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	tlsConn := Client(conn, clientConfig)
+	defer tlsConn.Close()
+
+	if err := tlsConn.Handshake(); err == nil {
+		t.Fatal("handshake should fail: cert SAN does not cover ServerName")
+	} else {
+		t.Logf("expected hostname-mismatch failure: %v", err)
+	}
+
+	// Server side may also error from the client's alert — that's fine.
 	<-errc
 }
 

@@ -164,6 +164,11 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 
 // doHandshake performs the actual handshake. Must be called with handshakeMu held.
 func (c *Conn) doHandshake() error {
+	// Reject a ServerName containing a NUL byte
+	if strings.IndexByte(c.config.ServerName, 0) >= 0 {
+		return errors.New("wolftls: ServerName contains NUL byte")
+	}
+
 	// Create CTX with version-flexible method
 	if c.isClient {
 		c.ctx = wolfSSL.WolfSSL_CTX_new_v23_client()
@@ -357,6 +362,16 @@ func (c *Conn) doHandshake() error {
 		}
 	}
 
+	// Bind the expected hostname so wolfSSL checks the server leaf
+	// certificate's SAN/CN against it during the handshake
+	if c.isClient && c.config.ServerName != "" && !c.config.InsecureSkipVerify {
+		ret := wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			c.freeSSL()
+			return fmt.Errorf("wolftls: failed to set domain name check (%d)", ret)
+		}
+	}
+
 	// Set ALPN
 	if len(c.config.NextProtos) > 0 {
 		// wolfSSL expects a comma-separated list
@@ -432,7 +447,17 @@ func (c *Conn) cleanup() {
 // buildConnectionState populates c.connState from the wolfSSL session.
 func (c *Conn) buildConnectionState() error {
 	c.connState.HandshakeComplete = true
-	c.connState.ServerName = c.config.ServerName
+	if c.isClient {
+		// Client: SNI is what we sent; mirror the value from config.
+		c.connState.ServerName = c.config.ServerName
+	} else {
+		// Server: SNI is what the client sent in its ClientHello; query
+		// the wolfSSL session. Required for server-side dispatch logic
+		// that reads ConnectionState().ServerName (e.g., net/http's
+		// r.TLS.ServerName, which downstream handlers use for per-host
+		// routing).
+		c.connState.ServerName = wolfSSL.WolfSSL_SNI_GetServerName(c.ssl)
+	}
 
 	// TLS version
 	versionStr := wolfSSL.WolfSSL_get_version(c.ssl)

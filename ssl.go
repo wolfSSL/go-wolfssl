@@ -109,6 +109,24 @@ package wolfSSL
 //      return 0;
 // }
 // #endif
+// #ifndef HAVE_ALPN
+// int wolfSSL_UseALPN(WOLFSSL* ssl, char* protocol_name_list,
+//                     unsigned int protocol_name_listSz, unsigned char options) {
+//      (void)ssl; (void)protocol_name_list; (void)protocol_name_listSz;
+//      (void)options; return -174;
+// }
+// int wolfSSL_ALPN_GetProtocol(WOLFSSL* ssl, char** protocol_name,
+//                              unsigned short* size) {
+//      (void)ssl; (void)protocol_name; (void)size; return -174;
+// }
+// int wolfSSL_ALPN_GetPeerProtocol(WOLFSSL* ssl, char** list,
+//                                  unsigned short* listSz) {
+//      (void)ssl; (void)list; (void)listSz; return -174;
+// }
+// int wolfSSL_ALPN_FreePeerProtocol(WOLFSSL* ssl, char** list) {
+//      (void)ssl; (void)list; return -174;
+// }
+// #endif
 import "C"
 import (
     "unsafe"
@@ -380,6 +398,12 @@ func WolfSSL_CTX_UseSNI(ctx *C.struct_WOLFSSL_CTX, sniType int, data []byte, siz
     if size <= 0 || size > len(data) || len(data) == 0 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_CTX_UseSNI(ctx, C.uchar(sniType),
                unsafe.Pointer(&data[0]), C.ushort(size)))
+}
+
+func WolfSSL_check_domain_name(ssl *C.struct_WOLFSSL, dn string) int {
+    cDN := C.CString(dn)
+    defer C.free(unsafe.Pointer(cDN))
+    return int(C.wolfSSL_check_domain_name(ssl, cDN))
 }
 
 func WolfSSL_UseALPN(ssl *C.struct_WOLFSSL, protoList string, options int) int {

@@ -114,15 +114,35 @@ package wolfSSL
 // }
 // #else
 // static int wolfx509_asn1_time_print(const WOLFSSL_ASN1_TIME* t, char* out, int outSz) { (void)t; (void)out; (void)outSz; return 0; }
-// static char* wolfSSL_X509_NAME_oneline(WOLFSSL_X509_NAME* name, char* in, int sz) { (void)name; (void)in; (void)sz; return NULL; }
+// char* wolfSSL_X509_NAME_oneline(WOLFSSL_X509_NAME* name, char* in, int sz) { (void)name; (void)in; (void)sz; return NULL; }
 // static int wolfx509_name_get_text_by_nid(WOLFSSL_X509_NAME* name, int nid, char* out, int outSz) { (void)name; (void)nid; (void)out; (void)outSz; return 0; }
-// static char* wolfSSL_X509_get_subjectCN(WOLFSSL_X509* x) { (void)x; return NULL; }
+// char* wolfSSL_X509_get_subjectCN(WOLFSSL_X509* x) { (void)x; return NULL; }
 // static int wolfx509_get_serial_bytes(WOLFSSL_X509* x, unsigned char* out, int outSz) { (void)x; (void)out; (void)outSz; return 0; }
 // static int wolfx509_get_authority_key_id(WOLFSSL_X509* x, unsigned char* out, int outSz) { (void)x; (void)out; (void)outSz; return 0; }
 // static WOLFSSL_X509_NAME* wolfSSL_X509_get_subject_name(WOLFSSL_X509* cert) { (void)cert; return NULL; }
 // static WOLFSSL_X509_NAME* wolfSSL_X509_get_issuer_name(WOLFSSL_X509* cert) { (void)cert; return NULL; }
 // static WOLFSSL_ASN1_TIME* wolfSSL_X509_get_notBefore(const WOLFSSL_X509* x) { (void)x; return NULL; }
 // static WOLFSSL_ASN1_TIME* wolfSSL_X509_get_notAfter(const WOLFSSL_X509* x) { (void)x; return NULL; }
+// #endif
+// #ifndef KEEP_PEER_CERT
+// WOLFSSL_X509* wolfSSL_get_peer_certificate(WOLFSSL* ssl) { (void)ssl; return NULL; }
+// #endif
+// #if !defined(OPENSSL_EXTRA) && !defined(WOLFSSL_WPAS_SMALL) && \
+//     !defined(KEEP_OUR_CERT) && !defined(KEEP_PEER_CERT) && !defined(SESSION_CERTS)
+// const unsigned char* wolfSSL_X509_get_der(WOLFSSL_X509* x509, int* outSz) {
+//     (void)x509; (void)outSz; return NULL;
+// }
+// #endif
+// #if !defined(KEEP_PEER_CERT) && !defined(SESSION_CERTS) && \
+//     !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL)
+// WOLFSSL_X509* wolfSSL_d2i_X509(WOLFSSL_X509** x509, const unsigned char** in, int len) {
+//     (void)x509; (void)in; (void)len; return NULL;
+// }
+// #endif
+// #ifndef OPENSSL_EXTRA
+// int wolfSSL_i2d_X509(WOLFSSL_X509* x509, unsigned char** out) {
+//     (void)x509; (void)out; return -174;
+// }
 // #endif
 // #include <string.h>
 import "C"

@@ -170,11 +170,10 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 		if err == io.EOF {
 			return C.int(cbioErrConnClose)
 		}
-		// CBIO_ERR_TIMEOUT maps to WANT_READ inside wolfSSL, which would
-		// loop. CBIO_ERR_CONN_CLOSE makes the handshake abort, which is
-		// what callers expect for a SetReadDeadline-driven timeout.
+		// Hitting the user set deadline for the read has no implication
+		// for the underlying TCP connection. Loop with WANT_READ.
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return C.int(cbioErrConnClose)
+			return C.int(cbioErrWantRead)
 		}
 		return C.int(cbioErrGeneral)
 	}
@@ -195,9 +194,6 @@ func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 		return C.int(n)
 	}
 	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return C.int(cbioErrConnClose)
-		}
 		return C.int(cbioErrConnClose)
 	}
 	return C.int(cbioErrWantWrite)

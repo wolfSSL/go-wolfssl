@@ -160,8 +160,10 @@ func Wc_ecc_export_private_only(key *C.struct_ecc_key, out []byte, outLen *int) 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_export_private_only(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -170,8 +172,10 @@ func Wc_ecc_export_x963_ex(key *C.struct_ecc_key, out []byte, outLen *int, compr
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_export_x963_ex(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen, C.int(compressed)))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -245,8 +249,10 @@ func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_shared_secret(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 

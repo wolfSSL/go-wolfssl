@@ -119,9 +119,12 @@ func Wc_HKDF(hashType int, inputKey []byte, inputKeySz int, salt []byte,
     if len(info) > 0 {
         infoPtr = (*C.uchar)(unsafe.Pointer(&info[0]))
     }
-    return int(C.wc_HKDF(C.int(hashType), ikmPtr,
+    PRIVATE_KEY_UNLOCK()
+    ret := int(C.wc_HKDF(C.int(hashType), ikmPtr,
                C.word32(inputKeySz), saltPtr,
                C.word32(saltSz), infoPtr,
                C.word32(infoSz), (*C.uchar)(unsafe.Pointer(&out[0])),
                C.word32(outSz)))
+    PRIVATE_KEY_LOCK()
+    return ret
 }

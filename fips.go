@@ -44,8 +44,8 @@ package wolfSSL
 //    printf("hash = %s\n", hash);
 //
 //    if (err == -203) {
-//        printf("In core integrity hash check failure, copy above hash\n");
-//        printf("into verifyCore[] in fips_test.c and rebuild\n");
+//        printf("In-core integrity hash check failure, copy above hash\n");
+//        printf("into verifyCore[] in wolfssl/wolfcrypt/src/fips_test.c and rebuild\n");
 //    }
 // }
 // void wc_SetDefaultFips_Cb(void) {
@@ -85,4 +85,9 @@ func PRIVATE_KEY_UNLOCK() int {
 
 func Wc_RunAllCast_fips() int {
     return int(C.wc_RunAllCast_fips())
+}
+
+func init() {
+    Wc_SetDefaultFips_Cb()
+    Wc_SetDefaultSeed_Cb()
 }

@@ -68,20 +68,20 @@ package wolftls
 //
 // /* Helpers that take the trampoline addresses without exposing Go to
 //  * the C function-pointer types (which cgo can't always represent). */
-// static void wolftls_set_io_recv(WOLFSSL_CTX* ctx) {
+// static inline void wolftls_set_io_recv(WOLFSSL_CTX* ctx) {
 //     wolfSSL_CTX_SetIORecv(ctx, ioRecvTrampoline);
 // }
-// static void wolftls_set_io_send(WOLFSSL_CTX* ctx) {
+// static inline void wolftls_set_io_send(WOLFSSL_CTX* ctx) {
 //     wolfSSL_CTX_SetIOSend(ctx, ioSendTrampoline);
 // }
 // #ifdef HAVE_SNI
-// static void wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
+// static inline void wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
 //     wolfSSL_CTX_set_servername_callback(ctx, (CallbackSniRecv)sniTrampoline);
 //     wolfSSL_CTX_set_servername_arg(ctx, (void*)(intptr_t)connID);
 // }
 // #endif
 // #ifdef WOLFSSL_CERT_SETUP_CB
-// static void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
+// static inline void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
 //     wolfSSL_CTX_set_cert_cb(ctx, certSetupTrampoline,
 //                              (void*)(intptr_t)connID);
 // }
@@ -89,7 +89,7 @@ package wolftls
 // /* Stub for vanilla wolfSSL builds without WOLFSSL_CERT_SETUP_CB.
 //  * wolftls.Conn's per-connection GetCertificate callback is unavailable
 //  * in this build mode; ctxSetCertSetupCallback becomes a no-op. */
-// static void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
+// static inline void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
 //     (void)ctx; (void)connID;
 // }
 // #endif

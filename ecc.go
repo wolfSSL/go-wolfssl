@@ -108,12 +108,17 @@ package wolfSSL
 // static int wc_ecc_negate_private(ecc_key* key) {
 //     mp_int order;
 //     int ret;
+//     mp_int* priv;
+// #ifdef WOLFSSL_HAVE_ECC_KEY_GET_PRIV
+//     priv = wc_ecc_key_get_priv(key);
+// #else
+//     priv = &key->k;
+// #endif
 //     ret = mp_init(&order);
 //     if (ret != 0) return ret;
 //     ret = mp_read_radix(&order, key->dp->order, MP_RADIX_HEX);
 //     if (ret == 0)
-//         ret = mp_sub(&order, wc_ecc_key_get_priv(key),
-//                      wc_ecc_key_get_priv(key));
+//         ret = mp_sub(&order, priv, priv);
 //     mp_clear(&order);
 //     if (ret == 0)
 //         ret = wc_ecc_make_pub(key, NULL);
@@ -160,8 +165,10 @@ func Wc_ecc_export_private_only(key *C.struct_ecc_key, out []byte, outLen *int) 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_export_private_only(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -170,8 +177,10 @@ func Wc_ecc_export_x963_ex(key *C.struct_ecc_key, out []byte, outLen *int, compr
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_export_x963_ex(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen, C.int(compressed)))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -245,8 +254,10 @@ func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
+    PRIVATE_KEY_UNLOCK()
     ret := int(C.wc_ecc_shared_secret(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
+    PRIVATE_KEY_LOCK()
     return ret
 }
 

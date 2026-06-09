@@ -274,7 +274,10 @@ func Wc_PBKDF2(out []byte, pwd []byte, pLen int, salt []byte, saltLen int, iter 
     if len(salt) > 0 {
         saltPtr = (*C.uchar)(unsafe.Pointer(&salt[0]))
     }
-    return int(C.wc_PBKDF2(outPtr, pwdPtr, C.int(pLen),
+    PRIVATE_KEY_UNLOCK()
+    ret := int(C.wc_PBKDF2(outPtr, pwdPtr, C.int(pLen),
                saltPtr, C.int(saltLen), C.int(iter), C.int(kLen), C.int(typeH)))
+    PRIVATE_KEY_LOCK()
+    return ret
 }
 

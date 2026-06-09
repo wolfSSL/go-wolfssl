@@ -1018,7 +1018,7 @@ func setupPair(t *testing.T) (client *Conn, server *Conn, cleanup func()) {
 		ln.Close()
 		t.Fatalf("dial: %v", err)
 	}
-	ln.Close()
+	defer ln.Close()
 
 	cli := Client(conn, clientConfig)
 	if err := cli.Handshake(); err != nil {

@@ -66,6 +66,7 @@ package wolfSSL
 // }
 // #endif
 import "C"
+import "fmt"
 
 func Wc_SetDefaultFips_Cb() {
     C.wc_SetDefaultFips_Cb()
@@ -88,6 +89,9 @@ func Wc_RunAllCast_fips() int {
 }
 
 func init() {
+    if ret := C.wolfCrypt_Init(); ret != 0 {
+        fmt.Printf("wolfCrypt_Init failed %d\n", ret)
+    }
     Wc_SetDefaultFips_Cb()
     Wc_SetDefaultSeed_Cb()
 }

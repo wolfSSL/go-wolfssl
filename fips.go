@@ -90,7 +90,7 @@ func Wc_RunAllCast_fips() int {
 
 func init() {
     if ret := C.wolfCrypt_Init(); ret != 0 {
-	panic(fmt.Sprintf("wolfCrypt_Init failed: %d", ret))
+        panic(fmt.Sprintf("wolfSSL: wolfCrypt_Init failed: %d", ret))
     }
     Wc_SetDefaultFips_Cb()
     Wc_SetDefaultSeed_Cb()

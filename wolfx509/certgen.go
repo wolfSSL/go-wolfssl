@@ -61,7 +61,8 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 		return nil, errors.New("wolfx509: nil key")
 	}
 
-	days, err := validityDays(template.NotBefore, template.NotAfter)
+	notBefore, notAfter, err := resolveValidity(template.NotBefore,
+		template.NotAfter, template.ValidDays)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,8 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 	opts := certBuildOpts{
 		SubjectCN:   template.Subject.CommonName,
 		Serial:      serial,
-		ValidDays:   days,
+		NotBefore:   notBefore,
+		NotAfter:    notAfter,
 		IsCA:        template.IsCA,
 		KeyUsage:    translateKeyUsage(template.KeyUsage),
 		ExtKeyUsage: translateExtKeyUsage(template.ExtKeyUsage),
@@ -141,30 +143,86 @@ func CreateCertificateRequest(template *CertificateRequest, key KeyHandle) ([]by
 	}, key)
 }
 
-// validityDays converts a NotBefore/NotAfter pair into a whole-days count
-// suitable for wolfCrypt's Cert.daysValid. wolfCrypt computes NotBefore
-// as "now"; if template.NotBefore is set in the past (e.g. derper's -30d
-// for clock-skew tolerance), we extend daysValid to cover NotAfter from
-// "now" instead of from NotBefore.
-func validityDays(notBefore, notAfter time.Time) (int, error) {
-	if notAfter.IsZero() {
-		return 0, errors.New("wolfx509: template.NotAfter is required")
+// clockSkewBackdate matches wolfCrypt's SetValidity, which subtracts one
+// day from notBefore to help with compliance
+const clockSkewBackdate = 24 * time.Hour
+
+// ASN.1 GeneralizedTime encodes the year as exactly four digits, so
+// years outside this range cannot be represented.
+const (
+	minASN1Year = 1
+	maxASN1Year = 9999
+)
+
+// resolveValidity determines the appropriate notBefore and notAfter time values
+//
+// notAfter is required unless validDays is set; notBefore on its own is an
+// error.
+//   - notBefore + notAfter: used directly, validDays must be unset
+//   - notAfter: notBefore will be set to (now - 1 day)
+//   - validDays: notBefore will be set to (now - 1 day) and notAfter will be
+//     validDays past now
+func resolveValidity(notBefore, notAfter time.Time, validDays int) (time.Time, time.Time, error) {
+	notBefore, notAfter = notBefore.Truncate(time.Second), notAfter.Truncate(time.Second)
+
+	if validDays < 0 {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: ValidDays (%d) must not be negative", validDays)
 	}
-	ref := time.Now()
-	if notBefore.Before(ref) && !notBefore.IsZero() {
-		// NotBefore in the past — use it as the anchor so the certificate
-		// spans the full requested window.
-		ref = notBefore
+	if !notAfter.IsZero() && validDays > 0 {
+		return time.Time{}, time.Time{}, errors.New("wolfx509: set either NotAfter or ValidDays, not both")
 	}
-	d := notAfter.Sub(ref)
-	if d <= 0 {
-		return 0, fmt.Errorf("wolfx509: NotAfter (%s) is not after the effective NotBefore (%s)", notAfter, ref)
+	if notAfter.IsZero() && validDays == 0 {
+		return time.Time{}, time.Time{}, errors.New("wolfx509: set NotAfter or ValidDays")
 	}
-	days := int(d / (24 * time.Hour))
-	if days == 0 {
-		days = 1
+	if notAfter.IsZero() && !notBefore.IsZero() {
+		return time.Time{}, time.Time{}, errors.New("wolfx509: NotBefore requires NotAfter; ValidDays is measured from issuance, not from NotBefore")
 	}
-	return days, nil
+
+	now := time.Now()
+	nb, na := notBefore, notAfter
+	if nb.IsZero() {
+		nb = now.Add(-clockSkewBackdate)
+	}
+	if na.IsZero() {
+		na = now.Add(time.Duration(validDays) * 24 * time.Hour)
+	}
+
+	base := notBefore
+	if base.IsZero() {
+		base = now
+	}
+	if !na.After(base) {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: NotAfter (%s) is not after base time (%s)", na, base)
+	}
+	if y := nb.UTC().Year(); y < minASN1Year || y > maxASN1Year {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: NotBefore year (%d) is outside the encodable range %d-%d", y, minASN1Year, maxASN1Year)
+	}
+	if y := na.UTC().Year(); y < minASN1Year || y > maxASN1Year {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: NotAfter year (%d) is outside the encodable range %d-%d", y, minASN1Year, maxASN1Year)
+	}
+	return nb, na, nil
+}
+
+// encodeValidityTime encodes ASN.1 for the UTC or GeneralizedTime formats
+func encodeValidityTime(t time.Time) []byte {
+	var tag byte
+	var s string
+
+	t = t.UTC()
+	if y := t.Year(); y >= 1950 && y <= 2049 {
+		tag = asnUTCTimeTag
+		s = t.Format("060102150405Z")
+	} else {
+		tag = asnGeneralizedTimeTag
+		s = t.Format("20060102150405Z")
+	}
+
+	out := make([]byte, 2+len(s))
+	out[0] = tag
+	out[1] = byte(len(s))
+	copy(out[2:], s)
+
+	return out
 }
 
 // translateKeyUsage maps wolfx509's crypto/x509-shaped KeyUsage bitmask

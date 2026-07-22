@@ -22,6 +22,21 @@ entirely on wolfCrypt-owned key handles.
 - `(c *Certificate) PublicECCRawXY()` — raw `(X, Y)` point export
   for ECDSA-P256 leaves.
 
+## Certificate validity
+
+`CreateCertificate` needs a validity window on the template. Supply it
+one of three ways:
+
+- `NotBefore` and `NotAfter` - used verbatim.
+- `NotAfter` alone - `NotBefore` is backdated one day from issuance.
+- `ValidDays` alone - `NotBefore` is backdated one day from issuance
+  and `NotAfter` lands `ValidDays` past issuance, so the certificate
+  still gets the full `ValidDays` of forward validity.
+
+The one-day backdate mirrors wolfCrypt's `SetValidity` and gives peers
+whose clock runs slow a grace window. An explicit `NotBefore` is never
+adjusted.
+
 ## Algorithm polymorphism
 
 `KeyHandle` is the package's polymorphic-key interface

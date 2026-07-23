@@ -57,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"unsafe"
 
 	"github.com/wolfssl/go-wolfssl/handles"
@@ -90,6 +91,11 @@ const (
 	wcExtKeyUsageOCSPSign    = 0x40
 )
 
+const (
+	asnUTCTimeTag         byte = C.ASN_UTC_TIME
+	asnGeneralizedTimeTag byte = C.ASN_GENERALIZED_TIME
+)
+
 // sigTypeFor maps a key algorithm to its wolfCrypt CTC_* sigType.
 func sigTypeFor(alg handles.Algorithm) (int, error) {
 	switch alg {
@@ -101,17 +107,18 @@ func sigTypeFor(alg handles.Algorithm) (int, error) {
 }
 
 // certBuildOpts collects the inputs for a single cert or CSR generation.
-// All fields are optional unless marked otherwise. ValidDays is ignored
-// by CSR generation (CSRs don't carry validity) and required otherwise.
+// All fields are optional unless marked otherwise. NotBefore/NotAfter is
+// ignored by CSR generation (CSRs don't carry validity) and required otherwise.
 type certBuildOpts struct {
-	SubjectCN   string   // CommonName; truncated if >= 64 bytes
-	Serial      []byte   // up to 20 bytes; ignored for CSRs, generated if empty
-	ValidDays   int      // lifetime in days from issuance; required for certs
-	IsCA        bool     // BasicConstraints CA:TRUE
-	KeyUsage    int      // OR of wcKeyUsage* constants
-	ExtKeyUsage int      // OR of wcExtKeyUsage* constants
-	DNSNames    []string // SubjectAltName dNSName entries
-	IPAddresses []net.IP // SubjectAltName iPAddress entries
+	SubjectCN   string    // CommonName; truncated if >= 64 bytes
+	Serial      []byte    // up to 20 bytes; ignored for CSRs, generated if empty
+	NotBefore   time.Time // Date marking the start of validity
+	NotAfter    time.Time // Date marking the end of validity
+	IsCA        bool      // BasicConstraints CA:TRUE
+	KeyUsage    int       // OR of wcKeyUsage* constants
+	ExtKeyUsage int       // OR of wcExtKeyUsage* constants
+	DNSNames    []string  // SubjectAltName dNSName entries
+	IPAddresses []net.IP  // SubjectAltName iPAddress entries
 
 	// AcmeKeyAuth, if non-empty, sets the RFC 8737 id-pe-acmeIdentifier
 	// (1.3.6.1.5.5.7.1.31) extension on the cert. Pass the raw keyAuth
@@ -134,8 +141,8 @@ func makeAndSignCASignedCert(opts certBuildOpts, parentDER []byte, leafKey, sign
 	return buildAndSignCert(opts, parentDER, leafKey, signerKey, false)
 }
 
-// makeAndSignCSR builds a self-signed PKCS#10 CSR. ValidDays / IsCA /
-// Serial in opts are ignored.
+// makeAndSignCSR builds a self-signed PKCS#10 CSR. NotBefore / NotAfter /
+// IsCA / Serial in opts are ignored.
 func makeAndSignCSR(opts certBuildOpts, key KeyHandle) ([]byte, error) {
 	return buildAndSignCert(opts, nil, key, key, true)
 }
@@ -154,8 +161,8 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 		return nil, fmt.Errorf("wolfx509: pubKey algorithm %d does not match signerKey algorithm %d",
 			pubKey.Algorithm(), signerKey.Algorithm())
 	}
-	if !isCSR && opts.ValidDays <= 0 {
-		return nil, errors.New("wolfx509: certBuildOpts.ValidDays must be > 0")
+	if !isCSR && (opts.NotBefore.IsZero() || opts.NotAfter.IsZero()) {
+		return nil, errors.New("wolfx509: NotBefore and NotAfter are required for certs")
 	}
 	if len(opts.Serial) > 20 {
 		return nil, fmt.Errorf("wolfx509: serial %d bytes > 20 max", len(opts.Serial))
@@ -175,12 +182,28 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 	cert.version = 2
 	cert.sigType = C.int(sigType)
-	cert.daysValid = C.int(opts.ValidDays)
 	if opts.IsCA {
 		cert.isCA = 1
 	}
 	cert.keyUsage = C.word16(opts.KeyUsage)
 	cert.extKeyUsage = C.byte(opts.ExtKeyUsage)
+
+	if !isCSR {
+		// NotBefore and NotAfter are set directly rather than relying on
+		// daysValid, so explicitly clear this value
+		cert.daysValid = 0
+
+		nb := encodeValidityTime(opts.NotBefore)
+		na := encodeValidityTime(opts.NotAfter)
+		if len(nb) > int(unsafe.Sizeof(cert.beforeDate)) ||
+			len(na) > int(unsafe.Sizeof(cert.afterDate)) {
+			return nil, fmt.Errorf("wolfx509: encoded validity date exceeds %d-byte cert date buffer", unsafe.Sizeof(cert.beforeDate))
+		}
+		C.memcpy(unsafe.Pointer(&cert.beforeDate[0]), unsafe.Pointer(&nb[0]), C.size_t(len(nb)))
+		cert.beforeDateSz = C.int(len(nb))
+		C.memcpy(unsafe.Pointer(&cert.afterDate[0]), unsafe.Pointer(&na[0]), C.size_t(len(na)))
+		cert.afterDateSz = C.int(len(na))
+	}
 
 	if len(opts.Serial) > 0 && !isCSR {
 		C.memcpy(unsafe.Pointer(&cert.serial[0]),

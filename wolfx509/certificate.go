@@ -56,6 +56,10 @@ type Certificate struct {
 	DNSNames              []string
 	IPAddresses           []net.IP
 
+	// ValidDays, if set, will set the number of days a certificate is valid
+	// for. This field is mutually exclusive with NotAfter.
+	ValidDays int
+
 	// AcmeKeyAuth, if non-empty, sets the RFC 8737 id-pe-acmeIdentifier
 	// (1.3.6.1.5.5.7.1.31) extension on the cert at build time. Used by
 	// TLS-ALPN-01 ACME challenge cert minting. Pass the raw keyAuth

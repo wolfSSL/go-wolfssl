@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"bytes"
 	"math/big"
 	"net"
 	"testing"
@@ -34,11 +35,13 @@ func TestCreateSelfSignedBasic(t *testing.T) {
 	}
 	defer k.Free()
 
+	notBefore := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+	notAfter := time.Now().Add(365 * 24 * time.Hour).Truncate(time.Second)
 	tmpl := &Certificate{
 		SerialNumber: big.NewInt(42),
 		Subject:      Name{CommonName: "test.example"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 	}
 	der, err := CreateCertificate(tmpl, tmpl, k, k)
 	if err != nil {
@@ -58,6 +61,12 @@ func TestCreateSelfSignedBasic(t *testing.T) {
 	}
 	if parsed.SerialNumber == nil || parsed.SerialNumber.Cmp(big.NewInt(42)) != 0 {
 		t.Errorf("SerialNumber = %v, want 42", parsed.SerialNumber)
+	}
+	if !parsed.NotBefore.Equal(notBefore) {
+		t.Errorf("NotBefore = %s, want %s", parsed.NotBefore, notBefore)
+	}
+	if !parsed.NotAfter.Equal(notAfter) {
+		t.Errorf("NotAfter = %s, want %s", parsed.NotAfter, notAfter)
 	}
 
 	// Stdlib cross-check — wolfCrypt-built cert must parse via crypto/x509.
@@ -264,32 +273,178 @@ func TestCreateCertificateRequest(t *testing.T) {
 	}
 }
 
-func TestValidityDays(t *testing.T) {
+func TestResolveValidity(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
-		name           string
-		before, after  time.Time
-		wantDays       int
-		wantErr        bool
+		name          string
+		before, after time.Time
+		validDays     int
+		wantErr       bool
 	}{
-		{"past-NotBefore spans window", now.Add(-24 * time.Hour), now.Add(72 * time.Hour), 4, false},
-		{"future-NotBefore", now.Add(1 * time.Hour), now.Add(48 * time.Hour), 2, false},
-		{"zero NotBefore", time.Time{}, now.Add(10 * 24 * time.Hour), 10, false},
+		{"both set, past NotBefore", now.Add(-24 * time.Hour), now.Add(72 * time.Hour), 0, false},
+		{"both set, future NotBefore", now.Add(1 * time.Hour), now.Add(48 * time.Hour), 0, false},
+		{"neither set, ValidDays from now", time.Time{}, time.Time{}, 90, false},
+		{"nothing set", time.Time{}, time.Time{}, 0, true},
+		{"only NotAfter set", time.Time{}, now.Add(10 * 24 * time.Hour), 0, false},
+		{"only NotAfter set, in the past", time.Time{}, now.Add(-time.Hour), 0, true},
+		{"only NotBefore set", now.Add(-time.Hour), time.Time{}, 0, true},
+		{"NotBefore with ValidDays", now.Add(-time.Hour), time.Time{}, 30, true},
+		{"NotAfter and ValidDays conflict", now, now.Add(24 * time.Hour), 5, true},
 		{"NotAfter before NotBefore", now.Add(time.Hour), now.Add(-time.Hour), 0, true},
-		{"zero NotAfter", time.Time{}, time.Time{}, 0, true},
+		{"negative ValidDays", time.Time{}, time.Time{}, -1, true},
+		{"negative ValidDays with both dates", now, now.Add(24 * time.Hour), -1, true},
+		{"NotAfter year past 9999", now, time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), 0, true},
+		{"NotBefore year negative", time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC), now, 0, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := validityDays(c.before, c.after)
+			lo := time.Now()
+			nb, na, err := resolveValidity(c.before, c.after, c.validDays)
+			hi := time.Now()
 			if (err != nil) != c.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, c.wantErr)
 			}
-			if err == nil && got != c.wantDays {
-				// Allow off-by-one for same-day rounding.
-				if diff := got - c.wantDays; diff != 0 && diff != 1 && diff != -1 {
-					t.Errorf("days=%d want~%d", got, c.wantDays)
+			if err != nil {
+				return
+			}
+			if !c.before.IsZero() {
+				want := c.before.Truncate(time.Second)
+				if !nb.Equal(want) {
+					t.Errorf("NotBefore = %s, want %s", nb, want)
+				}
+			} else {
+				nbLo := lo.Add(-clockSkewBackdate).Truncate(time.Second)
+				nbHi := hi.Add(-clockSkewBackdate)
+				if nb.Before(nbLo) || nb.After(nbHi) {
+					t.Errorf("NotBefore = %s, want within [%s, %s]", nb, nbLo, nbHi)
+				}
+			}
+			if !c.after.IsZero() {
+				want := c.after.Truncate(time.Second)
+				if !na.Equal(want) {
+					t.Errorf("NotAfter = %s, want %s", na, want)
+				}
+			} else {
+				d := time.Duration(c.validDays) * 24 * time.Hour
+				naLo, naHi := lo.Add(d).Truncate(time.Second), hi.Add(d)
+				if na.Before(naLo) || na.After(naHi) {
+					t.Errorf("NotAfter = %s, want within [%s, %s]", na, naLo, naHi)
 				}
 			}
 		})
+	}
+}
+
+func TestEncodeValidityTime(t *testing.T) {
+	cases := []struct {
+		name string
+		in   time.Time
+		want []byte
+	}{
+		{
+			"UTCTime for year <= 2049",
+			time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC),
+			append([]byte{asnUTCTimeTag, 13}, []byte("260720100000Z")...),
+		},
+		{
+			"GeneralizedTime for year >= 2050",
+			time.Date(2050, 1, 2, 3, 4, 5, 0, time.UTC),
+			append([]byte{asnGeneralizedTimeTag, 15}, []byte("20500102030405Z")...),
+		},
+		{
+			"GeneralizedTime for year < 1950",
+			time.Date(1949, 12, 31, 23, 59, 59, 0, time.UTC),
+			append([]byte{asnGeneralizedTimeTag, 15}, []byte("19491231235959Z")...),
+		},
+		{
+			"non-UTC input normalized to UTC",
+			time.Date(2026, 7, 20, 10, 0, 0, 0, time.FixedZone("UTC+2", 2*3600)),
+			append([]byte{asnUTCTimeTag, 13}, []byte("260720080000Z")...),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := encodeValidityTime(c.in)
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("encodeValidityTime = %v (%q), want %v (%q)",
+					got, got[2:], c.want, c.want[2:])
+			}
+		})
+	}
+}
+
+func TestCreateCertificateGeneralizedTime(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	notBefore := time.Now().Add(-time.Hour).Truncate(time.Second)
+	notAfter := time.Date(3000, 1, 2, 3, 4, 5, 0, time.UTC)
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(11),
+		Subject:      Name{CommonName: "gt.example"},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+	}
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+
+	parsed, err := ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("wolfx509.ParseCertificate: %v", err)
+	}
+	defer parsed.Free()
+	if !parsed.NotBefore.Equal(notBefore) {
+		t.Errorf("NotBefore = %s, want %s", parsed.NotBefore, notBefore)
+	}
+	if !parsed.NotAfter.Equal(notAfter) {
+		t.Errorf("NotAfter = %s, want %s", parsed.NotAfter, notAfter)
+	}
+
+	stdCert, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib crypto/x509.ParseCertificate rejected wolfCrypt cert: %v", err)
+	}
+	if !stdCert.NotAfter.Equal(notAfter) {
+		t.Errorf("stdlib NotAfter = %s, want %s", stdCert.NotAfter, notAfter)
+	}
+}
+
+func TestCreateCertificateValidDays(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(7),
+		Subject:      Name{CommonName: "validity.example"},
+		ValidDays:    30,
+	}
+	lo := time.Now().Truncate(time.Second)
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	hi := time.Now()
+
+	parsed, err := ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("wolfx509.ParseCertificate: %v", err)
+	}
+	defer parsed.Free()
+
+	nbLo, nbHi := lo.Add(-clockSkewBackdate), hi.Add(-clockSkewBackdate)
+	if parsed.NotBefore.Before(nbLo) || parsed.NotBefore.After(nbHi) {
+		t.Errorf("NotBefore = %s, want within [%s, %s]", parsed.NotBefore, nbLo, nbHi)
+	}
+	naLo, naHi := lo.Add(30*24*time.Hour), hi.Add(30*24*time.Hour)
+	if parsed.NotAfter.Before(naLo) || parsed.NotAfter.After(naHi) {
+		t.Errorf("NotAfter = %s, want within [%s, %s]", parsed.NotAfter, naLo, naHi)
 	}
 }

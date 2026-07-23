@@ -594,6 +594,74 @@ func TestVerifyHostnameMismatch(t *testing.T) {
 	<-errc
 }
 
+// TestVerifyFailsClosedWhenServerNameEmpty checks that a client with peer
+// verification enabled (InsecureSkipVerify == false) but no ServerName is
+// rejected before the handshake, matching crypto/tls.
+//
+// The server presents a certificate that chains to the trusted CA but is
+// issued for example.com / 127.0.0.1. doHandshake only performs the
+// certificate name check when ServerName is non-empty, so with an empty
+// ServerName the name is never checked while the trusted chain is still
+// accepted. crypto/tls rejects this configuration ("either ServerName or
+// InsecureSkipVerify must be specified"); wolftls should do the same.
+func TestVerifyFailsClosedWhenServerNameEmpty(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	caPEM := loadFile(t, certPath("ca-cert.pem"))
+
+	serverConfig := &Config{
+		Certificates: []Certificate{{
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
+		}},
+	}
+
+	// Verification ON, but no ServerName.
+	clientConfig := &Config{
+		ServerName:         "",
+		InsecureSkipVerify: false,
+		RootCAPEMs:         [][]byte{caPEM},
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		defer tlsConn.Close()
+		errc <- tlsConn.Handshake()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	tlsConn := Client(conn, clientConfig)
+	defer tlsConn.Close()
+
+	err = tlsConn.Handshake()
+	if err == nil {
+		t.Fatal("client handshake succeeded with verification enabled but " +
+			"empty ServerName — the certificate name was never checked. " +
+			"Expected the handshake to be rejected, as crypto/tls does.")
+	}
+	t.Logf("failed closed as expected: %v", err)
+
+	// The client rejected the config before sending a ClientHello, so close
+	// the connection to unblock the server's handshake read, then drain it.
+	tlsConn.Close()
+	<-errc
+}
+
 func TestMinMaxVersion(t *testing.T) {
 	certPEM := loadFile(t, certPath("server-cert.pem"))
 	keyPEM := loadFile(t, certPath("server-key.pem"))

@@ -164,8 +164,8 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	if !isCSR && (opts.NotBefore.IsZero() || opts.NotAfter.IsZero()) {
 		return nil, errors.New("wolfx509: NotBefore and NotAfter are required for certs")
 	}
-	if len(opts.Serial) > 20 {
-		return nil, fmt.Errorf("wolfx509: serial %d bytes > 20 max", len(opts.Serial))
+	if max := int(C.CTC_SERIAL_SIZE); len(opts.Serial) > max {
+		return nil, fmt.Errorf("wolfx509: serial %d bytes > %d max", len(opts.Serial), max)
 	}
 	if max := int(C.CTC_NAME_SIZE); len(opts.SubjectCN) >= max {
 		return nil, fmt.Errorf("wolfx509: SubjectCN %d bytes >= %d max", len(opts.SubjectCN), max)

@@ -169,6 +169,12 @@ func (c *Conn) doHandshake() error {
 		return errors.New("wolftls: ServerName contains NUL byte")
 	}
 
+	// A client with verification enabled must set ServerName; without it the
+	// certificate name is never checked, so reject rather than proceed.
+	if c.isClient && !c.config.InsecureSkipVerify && c.config.ServerName == "" {
+		return errors.New("wolftls: either ServerName or InsecureSkipVerify must be specified")
+	}
+
 	// Create CTX with version-flexible method
 	if c.isClient {
 		c.ctx = wolfSSL.WolfSSL_CTX_new_v23_client()

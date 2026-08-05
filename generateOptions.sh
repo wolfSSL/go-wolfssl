@@ -2,22 +2,59 @@
 
 # Usage: ./generateOptions.sh [<wolfssl-prefix-or-source-root>]
 #
-# If the argument is an installed wolfSSL prefix (containing
-# include/wolfssl/options.h), options.go is generated and all cgo-bearing
-# files are repointed at that prefix. If the argument is a wolfSSL source
-# root (containing wolfssl/options.h), only options.go is generated.
-# With no argument, defaults to ../wolfssl as a source root and /usr/local.
+# Points the #cgo CFLAGS/LDFLAGS of every cgo-using package at a wolfSSL
+# install. If the argument is an installed wolfSSL prefix (containing
+# include/wolfssl/options.h), the paths point at that prefix. If it is a wolfSSL
+# source root (containing wolfssl/options.h), or no argument is given, they
+# point at /usr/local.
 
 OPTIONS_H="../wolfssl/wolfssl/options.h"
+DEFAULT_PREFIX="/usr/local"
 PREFIX=""
 
+CGO_FILES="aes.go wolftls/conn.go wolfx509/certgen_wolfcrypt.go \
+           examples/client/client-psk.go examples/server/server-psk.go"
+
+SUCCESS=0
+on_exit() {
+    for f in $CGO_FILES; do
+        if [ "$SUCCESS" -eq 1 ]; then
+            rm -f "$f.bak"
+        elif [ -f "$f.bak" ]; then
+            mv "$f.bak" "$f"
+        fi
+    done
+    if [ "$SUCCESS" -eq 0 ]; then
+        rm -f options.go
+    fi
+}
+
+for f in $CGO_FILES; do
+    if [ ! -f "$f" ]; then
+        echo "Expected cgo-bearing file not found: $f"
+        exit 99
+    fi
+done
+
 if [ -n "$1" ]; then
-    WOLFSSL_PATH="$1"
+    if [ ! -d "$1" ]; then
+        echo "Path to wolfSSL is not a directory"
+        exit 99
+    fi
+
+    # Ensure the path is in absolute format
+    WOLFSSL_PATH=$(CDPATH= cd -- "$1" > /dev/null && pwd)
+    if [ -z "$WOLFSSL_PATH" ]; then
+        echo "Couldn't resolve $1 to an absolute path"
+        exit 99
+    fi
+
     echo "Path to wolfSSL was supplied."
 
     if [ -f "$WOLFSSL_PATH/include/wolfssl/options.h" ]; then
         OPTIONS_H="$WOLFSSL_PATH/include/wolfssl/options.h"
         PREFIX="$WOLFSSL_PATH"
+        echo "wolfSSL install given, linking/building with $PREFIX"
     elif [ -f "$WOLFSSL_PATH/wolfssl/options.h" ]; then
         OPTIONS_H="$WOLFSSL_PATH/wolfssl/options.h"
     else
@@ -32,32 +69,53 @@ else
     fi
 fi
 
-rm -f options.go
-echo "package wolfSSL" >> options.go
-echo ""                >> options.go
-echo "// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl" >> options.go
-echo "// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm"                >> options.go
-sed 's/^/\/\/ /' "$OPTIONS_H"                                          >> options.go
-echo "options.go generated."
-
-# When the supplied path is an installed wolfSSL prefix, repoint cgo
-# directives in every cgo-bearing file at $PREFIX. Skipped for source-tree
-# layouts (no <src>/lib to point -L at).
-if [ ! -z "$PREFIX" ]; then
-    # First normalize back to upstream defaults, so re-running this script with a new
-    # prefix overwrites the old one rather than no-op'ing.
-    sed -i.bak \
-        -e "s|-I[^ ]*/include -I[^ ]*/include/wolfssl|-I/usr/include -I/usr/include/wolfssl|" \
-        -e "s|-L[^ ]*/lib -lwolfssl|-L/usr/local/lib -lwolfssl|" \
-        options.go aes.go wolfx509/certgen_wolfcrypt.go wolftls/conn.go \
-        && rm options.go.bak aes.go.bak wolfx509/certgen_wolfcrypt.go.bak wolftls/conn.go.bak
-    sed -i.bak \
-        -e "s|-I/usr/include -I/usr/include/wolfssl|-I$PREFIX/include -I$PREFIX/include/wolfssl|" \
-        -e "s| -I/usr/local/include -I/usr/local/include/wolfssl||" \
-        -e "s|-L/usr/local/lib|-L$PREFIX/lib|" \
-        options.go aes.go wolfx509/certgen_wolfcrypt.go wolftls/conn.go \
-        && rm options.go.bak aes.go.bak wolfx509/certgen_wolfcrypt.go.bak wolftls/conn.go.bak
-    echo "cgo paths pointed at $PREFIX."
+if [ -z "$PREFIX" ]; then
+    PREFIX="$DEFAULT_PREFIX"
+    echo "wolfSSL install dir not given, linking/building with default prefix ($DEFAULT_PREFIX)."
 fi
+
+# When on Windows convert the path format
+if command -v cygpath >/dev/null 2>&1; then
+    PREFIX=$(cygpath -m "$PREFIX")
+fi
+
+case "$PREFIX" in
+    *[!/_.:+[:alnum:]-]*)
+        echo "Prefix contains characters a #cgo directive cannot express: $PREFIX"
+        echo "Use a path made up of letters, digits and / _ . : + - only."
+        exit 99
+        ;;
+esac
+
+trap on_exit EXIT
+trap 'exit 99' INT TERM
+
+rm -f options.go
+echo "package wolfSSL"                                       >> options.go
+echo ""                                                      >> options.go
+echo "// #cgo CFLAGS: -g -Wall -I$PREFIX/include"            >> options.go
+echo "// #cgo LDFLAGS: -L$PREFIX/lib -lwolfssl -lm"          >> options.go
+sed 's/^/\/\/ /' "$OPTIONS_H"                                >> options.go
+if [ $? -ne 0 ]; then
+    echo "Failed to generate options.go from $OPTIONS_H."
+    exit 99
+fi
+echo "options.go generated from $OPTIONS_H."
+
+# #cgo directives are package-scoped, so each cgo-using package carries one
+# declaration. Replace the whole directive line to prevent drift.
+sed -i.bak \
+    -e "s|^// #cgo CFLAGS:.*|// #cgo CFLAGS: -g -Wall -I$PREFIX/include|" \
+    -e "s|^// #cgo LDFLAGS:.*|// #cgo LDFLAGS: -L$PREFIX/lib -lwolfssl -lm|" \
+    $CGO_FILES
+if [ $? -ne 0 ]; then
+    echo "Failed to update cgo directives."
+    exit 99
+fi
+
+SUCCESS=1
+
+echo "cgo paths pointed at $PREFIX."
+echo "Success!"
 
 exit 0

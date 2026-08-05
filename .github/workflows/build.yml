@@ -75,8 +75,28 @@ jobs:
           go get golang.org/x/term
           go mod tidy
 
-      - name: Generate options.go (full config)
-        run: ./generateOptions.sh /usr/local
+      - name: Smoke test generateOptions.sh
+        run: |
+          set -e
+          CGO_FILES="aes.go wolftls/conn.go wolfx509/certgen_wolfcrypt.go \
+                     examples/client/client-psk.go examples/server/server-psk.go"
+
+          # the path used must be under fake-prefix
+          mkdir -p /tmp/fake-prefix/include/wolfssl
+          cp /usr/local/include/wolfssl/options.h /tmp/fake-prefix/include/wolfssl/
+          ./generateOptions.sh /tmp/fake-prefix
+          for f in options.go $CGO_FILES; do
+            grep -q -- '-I/tmp/fake-prefix/include' "$f" || { echo "$f CFLAGS not repointed"; exit 1; }
+            if grep -q '^// #cgo LDFLAGS:' "$f"; then
+              grep -q -- '-L/tmp/fake-prefix/lib -lwolfssl -lm' "$f" || { echo "$f LDFLAGS not repointed"; exit 1; }
+            fi
+          done
+
+          # cleanup should function properly
+          test -z "$(find . -name '*.bak')" || { echo "leftover .bak files"; exit 1; }
+
+          # generate with the actual install dir
+          ./generateOptions.sh /usr/local
 
       - name: Build go-wolfssl library
         run: go build .

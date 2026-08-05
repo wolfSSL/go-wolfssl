@@ -20,8 +20,8 @@
 
 package wolfSSL
 
-// #cgo CFLAGS: -g -Wall -I/usr/include -I/usr/include/wolfssl -I/usr/local/include -I/usr/local/include/wolfssl
-// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl
+// #cgo CFLAGS: -g -Wall -I/usr/local/include
+// #cgo LDFLAGS: -L/usr/local/lib -lwolfssl -lm
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/aes.h>
 // #include <wolfssl/wolfcrypt/pwdbased.h>

@@ -20,7 +20,7 @@
 
 package main
 
-//#cgo CFLAGS: -g -Wall -I/usr/include 
+// #cgo CFLAGS: -g -Wall -I/usr/local/include
 //#include <string.h>
 //#include <wolfssl/options.h>
 //#include <wolfssl/ssl.h>

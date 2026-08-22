@@ -22,6 +22,8 @@ package wolfx509
 
 import (
 	"bytes"
+	"encoding/asn1"
+	"encoding/hex"
 	"math/big"
 	"net"
 	"testing"
@@ -446,5 +448,75 @@ func TestCreateCertificateValidDays(t *testing.T) {
 	naLo, naHi := lo.Add(30*24*time.Hour), hi.Add(30*24*time.Hour)
 	if parsed.NotAfter.Before(naLo) || parsed.NotAfter.After(naHi) {
 		t.Errorf("NotAfter = %s, want within [%s, %s]", parsed.NotAfter, naLo, naHi)
+	}
+}
+
+// oidBasicConstraints is id-ce-basicConstraints (RFC 5280 4.2.1.9).
+var oidBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+
+// TestBasicConstraintsMatrix pins the BasicConstraints extension that
+// emitted for a given template:
+//   - emitted only when BasicConstraintsValid is set,
+//   - always critical,
+//   - CA omitted when IsCA is false,
+func TestBasicConstraintsMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		bcValid     bool
+		isCA        bool
+		wantPresent bool
+		wantValue   string // hex of the extension value
+	}{
+		{"valid+CA", true, true, true, "30030101ff"},
+		{"valid+notCA", true, false, true, "3000"},
+		{"notValid+CA", false, true, false, ""},
+		{"notValid+notCA", false, false, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, err := GenerateP256Key()
+			if err != nil {
+				t.Fatalf("GenerateP256Key: %v", err)
+			}
+			defer k.Free()
+
+			tmpl := &Certificate{
+				SerialNumber:          big.NewInt(1),
+				Subject:               Name{CommonName: "bc test"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				BasicConstraintsValid: tc.bcValid,
+				IsCA:                  tc.isCA,
+			}
+			der, err := CreateCertificate(tmpl, tmpl, k, k)
+			if err != nil {
+				t.Fatalf("CreateCertificate: %v", err)
+			}
+			parsed, err := stdlibParseCert(der)
+			if err != nil {
+				t.Fatalf("stdlibParseCert: %v", err)
+			}
+
+			for _, ext := range parsed.Extensions {
+				if !ext.Id.Equal(oidBasicConstraints) {
+					continue
+				}
+				if !tc.wantPresent {
+					t.Fatalf("BasicConstraints emitted for BasicConstraintsValid=false")
+				}
+				if !ext.Critical {
+					t.Error("BasicConstraints is not critical; RFC 5280 4.2.1.9 requires it of CA certs and crypto/x509 always marks it")
+				}
+				if got := hex.EncodeToString(ext.Value); got != tc.wantValue {
+					t.Errorf("BasicConstraints value = %s, want %s", got, tc.wantValue)
+				}
+				if parsed.IsCA != tc.isCA {
+					t.Errorf("parsed IsCA = %v, want %v", parsed.IsCA, tc.isCA)
+				}
+				return
+			}
+			if tc.wantPresent {
+				t.Fatal("BasicConstraints extension missing")
+			}
+		})
 	}
 }

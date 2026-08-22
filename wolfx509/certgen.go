@@ -83,6 +83,7 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 		DNSNames:    template.DNSNames,
 		IPAddresses: template.IPAddresses,
 		AcmeKeyAuth: template.AcmeKeyAuth,
+		BasicConstraintsValid: template.BasicConstraintsValid,
 	}
 
 	if template == parent && pubKey == signer {

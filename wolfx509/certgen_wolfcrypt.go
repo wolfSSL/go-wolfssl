@@ -193,7 +193,7 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	cert.sigType = C.int(sigType)
 	// BasicConstraints: emitted only when BasicConstraintsValid is set, has to
 	// be marked CRITICAL if set.
-	// When IsCA is TRUE, wolfSSL will automiatically encode the extension.
+	// When IsCA is TRUE, wolfSSL will automatically encode the extension.
 	if opts.BasicConstraintsValid {
 		cert.basicConstCrit = 1
 		if opts.IsCA {

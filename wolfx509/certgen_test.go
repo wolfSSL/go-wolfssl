@@ -454,11 +454,12 @@ func TestCreateCertificateValidDays(t *testing.T) {
 // oidBasicConstraints is id-ce-basicConstraints (RFC 5280 4.2.1.9).
 var oidBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
 
-// TestBasicConstraintsMatrix pins the BasicConstraints extension that
+// TestBasicConstraintsMatrix pins the BasicConstraints extension that is
 // emitted for a given template:
 //   - emitted only when BasicConstraintsValid is set,
 //   - always critical,
-//   - CA omitted when IsCA is false,
+//   - present but with the cA boolean omitted (an empty SEQUENCE) when IsCA
+//     is false.
 func TestBasicConstraintsMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

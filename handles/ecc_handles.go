@@ -149,7 +149,13 @@ func (k *EccKey) Rng() *wolfSSL.WC_RNG { return &k.rng }
 
 func (k *EccKey) Algorithm() Algorithm    { return AlgECDSAP256 }
 func (k *EccKey) CKeyPtr() unsafe.Pointer { return unsafe.Pointer(&k.raw) }
-func (k *EccKey) CRngPtr() unsafe.Pointer { return unsafe.Pointer(&k.rng) }
+
+func (k *EccKey) CRngPtr() unsafe.Pointer {
+	if k == nil || !k.hasRng {
+		return nil
+	}
+	return unsafe.Pointer(&k.rng)
+}
 
 // -----------------------------------------------------------------------------
 // EccKey marshal/parse helpers

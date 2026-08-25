@@ -654,12 +654,74 @@ func TestVerifyFailsClosedWhenServerNameEmpty(t *testing.T) {
 			"empty ServerName — the certificate name was never checked. " +
 			"Expected the handshake to be rejected, as crypto/tls does.")
 	}
+	// Assert it is the fail-closed guard rejecting the config, not an unrelated
+	// failure, so the test keeps pinning the guard if the handshake path changes.
+	if !strings.Contains(err.Error(),
+		"either ServerName or InsecureSkipVerify must be specified") {
+		t.Fatalf("expected the ServerName-required guard error, got: %v", err)
+	}
 	t.Logf("failed closed as expected: %v", err)
 
 	// The client rejected the config before sending a ClientHello, so close
 	// the connection to unblock the server's handshake read, then drain it.
 	tlsConn.Close()
 	<-errc
+}
+
+// A client with InsecureSkipVerify set may omit ServerName: the fail-closed
+// guard must not fire and the handshake must complete. This pins the guard's
+// !InsecureSkipVerify condition so it is not later simplified into rejecting
+// every empty-ServerName client.
+func TestInsecureSkipVerifyAllowsEmptyServerName(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	serverConfig := &Config{
+		Certificates: []Certificate{{
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
+		}},
+	}
+
+	// Verification OFF and no ServerName: allowed, guard must not fire.
+	clientConfig := &Config{
+		ServerName:         "",
+		InsecureSkipVerify: true,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		defer tlsConn.Close()
+		errc <- tlsConn.Handshake()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	tlsConn := Client(conn, clientConfig)
+	defer tlsConn.Close()
+
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("client handshake should succeed with InsecureSkipVerify and "+
+			"empty ServerName, got: %v", err)
+	}
+
+	if err := <-errc; err != nil {
+		t.Fatalf("server handshake failed: %v", err)
+	}
 }
 
 func TestMinMaxVersion(t *testing.T) {

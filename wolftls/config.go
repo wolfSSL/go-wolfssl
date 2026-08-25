@@ -85,9 +85,15 @@ type Config struct {
 	// loading into wolfSSL's certificate store.
 	RootCAPEMs [][]byte
 
-	// Certificates contains one or more certificate chains to present to
-	// the other side of the connection. Server configurations must include
-	// at least one certificate unless GetCertificate is set.
+	// Certificates supplies the certificate chain to present to the other
+	// side of the connection. Servers must include at least
+	// one certificate unless GetCertificate is set.
+	//
+	// Only Certificates[0] is used. Unlike crypto/tls, a WOLFSSL_CTX has a
+	// single certificate/private-key slot, and loading a second chain would
+	// replace the first.
+	//
+	// TODO: Implement support for multiple certs/identities to match crypto/tls
 	Certificates []Certificate
 
 	// GetCertificate returns a certificate based on the ClientHello. It is

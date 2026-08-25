@@ -45,8 +45,8 @@ package wolfx509
 // }
 // #endif
 // #ifndef WOLFSSL_ACME_OID
-// static int wc_SetAcmeIdentifierExt(Cert* cert, const char* keyAuth,
-//                                     int keyAuthSz) {
+// static int wc_SetAcmeIdentifierExt(Cert* cert, const byte* keyAuth,
+//                                     word32 keyAuthSz) {
 //     (void)cert; (void)keyAuth; (void)keyAuthSz;
 //     return -174;
 // }

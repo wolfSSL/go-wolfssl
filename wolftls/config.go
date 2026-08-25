@@ -79,6 +79,9 @@ type Config struct {
 	// InsecureSkipVerify disables wolfSSL's built-in certificate verification.
 	// When true, the VerifyConnection callback (if set) is still called after
 	// the handshake so the caller can perform custom verification.
+	//
+	// This determines how a client verifies the server, setting it on a
+	// server is a no-op.
 	InsecureSkipVerify bool
 
 	// RootCAPEMs provides root CA certificates as raw PEM blocks for direct
@@ -128,7 +131,9 @@ type Config struct {
 	CipherSuites []string
 
 	// ClientAuth controls how the server handles client certificates.
-	// Ignored on the client side. When set to RequireAnyClientCert or
+	// Ignored on the client side. NoClientCert (the zero value) requests
+	// no client certificate at all, and one sent anyway is not verified.
+	// When set to RequireAnyClientCert or
 	// RequireAndVerifyClientCert, the server will fail the handshake if
 	// the client does not present a certificate. When set to
 	// VerifyClientCertIfGiven or RequireAndVerifyClientCert, wolfSSL

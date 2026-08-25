@@ -23,8 +23,15 @@ package wolftls
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand"
 	"net"
 	"os"
@@ -1282,4 +1289,181 @@ func TestConcurrentReadWrite(t *testing.T) {
 		}
 	}
 	t.Logf("exchanged %d messages (%d bytes each) bidirectionally", messages, msgSize)
+}
+
+// clientAuthHandshake runs a server with the given ClientAuth and
+// InsecureSkipVerify against a client that presents clientCert (nil for an
+// anonymous client). It reports the server-side handshake error (nil means
+// the client was accepted) and how many certificates the server saw.
+func clientAuthHandshake(t *testing.T, auth ClientAuthType, insecure bool, clientCert *Certificate) (error, int) {
+	t.Helper()
+
+	srvCfg := &Config{
+		Certificates: []Certificate{{
+			CertPEM: loadFile(t, certPath("server-cert.pem")),
+			KeyPEM:  loadFile(t, certPath("server-key.pem")),
+		}},
+		RootCAPEMs:         [][]byte{loadFile(t, certPath("ca-cert.pem"))},
+		ClientAuth:         auth,
+		InsecureSkipVerify: insecure,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	type result struct {
+		err       error
+		peerCerts int
+	}
+	srvRes := make(chan result, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			srvRes <- result{err: err}
+			return
+		}
+		defer conn.Close()
+		s := Server(conn, srvCfg)
+		defer s.Close()
+		if err := s.Handshake(); err != nil {
+			srvRes <- result{err: err}
+			return
+		}
+		srvRes <- result{peerCerts: len(s.ConnectionState().PeerCertificates)}
+	}()
+
+	c, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	cliCfg := &Config{ServerName: "localhost", InsecureSkipVerify: true}
+	if clientCert != nil {
+		cliCfg.Certificates = []Certificate{*clientCert}
+	}
+	cli := Client(c, cliCfg)
+	defer cli.Close()
+	_ = cli.Handshake()
+
+	res := <-srvRes
+	return res.err, res.peerCerts
+}
+
+// clientAuthNoCertHandshake is clientAuthHandshake with an anonymous client.
+func clientAuthNoCertHandshake(t *testing.T, auth ClientAuthType, insecure bool) error {
+	t.Helper()
+	err, _ := clientAuthHandshake(t, auth, insecure, nil)
+	return err
+}
+
+// TestClientAuthNotRelaxedByInsecureSkipVerify checks that a server's
+// mandatory-client-auth policy survives InsecureSkipVerify. Previously the
+// verification-mode switch tested InsecureSkipVerify first, installing
+// SSL_VERIFY_NONE, which on a server suppresses the CertificateRequest
+// altogether and let anonymous clients complete the handshake.
+func TestClientAuthNotRelaxedByInsecureSkipVerify(t *testing.T) {
+	for _, auth := range []struct {
+		name string
+		val  ClientAuthType
+	}{
+		{"RequireAnyClientCert", RequireAnyClientCert},
+		{"RequireAndVerifyClientCert", RequireAndVerifyClientCert},
+	} {
+		for _, insecure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/InsecureSkipVerify=%v", auth.name, insecure), func(t *testing.T) {
+				err := clientAuthNoCertHandshake(t, auth.val, insecure)
+				if err == nil {
+					t.Fatal("server completed the handshake with a client that presented no certificate")
+				}
+				t.Logf("rejected as expected: %v", err)
+			})
+		}
+	}
+}
+
+// TestUnknownClientAuthFailsClosed covers a ClientAuth value outside the
+// defined set. It reaches the server branch (it is != NoClientCert) but
+// matches no case in the inner switch, so it lands on the seeded mode.
+// That seed must be SSL_VERIFY_PEER: seeded with SSL_VERIFY_NONE the server
+// sent no CertificateRequest, silently disabling client auth for what is
+// most likely a caller bug.
+func TestUnknownClientAuthFailsClosed(t *testing.T) {
+	// server-cert/key doubles as a client identity here: it chains to
+	// ca-cert.pem, which is what the server loads as RootCAPEMs, so the
+	// handshake completes and any failure is about the CertificateRequest
+	// rather than an unrelated verification error.
+	clientCert := &Certificate{
+		CertPEM: loadFile(t, certPath("server-cert.pem")),
+		KeyPEM:  loadFile(t, certPath("server-key.pem")),
+	}
+	err, peerCerts := clientAuthHandshake(t, ClientAuthType(99), false, clientCert)
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	if peerCerts == 0 {
+		t.Fatal("server sent no CertificateRequest for an unknown ClientAuth value; client auth was silently disabled")
+	}
+	t.Logf("unknown ClientAuth requested a client certificate as expected: peerCerts=%d", peerCerts)
+}
+
+// foreignClientCert returns a self-signed certificate and key, i.e. an
+// identity that chains to nothing the server trusts.
+func foreignClientCert(t *testing.T) *Certificate {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "unaffiliated client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	return &Certificate{
+		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		KeyPEM:  pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+	}
+}
+
+// TestNoClientCertRequestsNothing pins NoClientCert to crypto/tls semantics:
+// "no client certificate should be requested during the handshake, and if
+// any certificates are sent they will not be verified". NoClientCert used to
+// fall through to SSL_VERIFY_PEER, so the server solicited a certificate it
+// had declared no interest in and then killed the handshake over a chain it
+// could not validate -- rejecting, on client-auth grounds, a client of a
+// server that does no client auth.
+func TestNoClientCertRequestsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		clientCert *Certificate
+	}{
+		{"anonymous client", nil},
+		{"client offering an untrusted cert", foreignClientCert(t)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err, peerCerts := clientAuthHandshake(t, NoClientCert, false, tc.clientCert)
+			if err != nil {
+				t.Fatalf("server rejected the client under NoClientCert: %v", err)
+			}
+			if peerCerts != 0 {
+				t.Errorf("server collected %d peer certificates under NoClientCert; it should not have asked", peerCerts)
+			}
+		})
+	}
 }

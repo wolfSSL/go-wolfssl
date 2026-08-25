@@ -200,15 +200,20 @@ func (c *Conn) doHandshake() error {
 		}
 	}
 
-	// Configure verification mode. Server-side ClientAuth takes
-	// precedence over the default SSL_VERIFY_PEER so a server can
-	// require (or reject) client certificates. On client side or when
-	// ClientAuth is unset, fall back to SSL_VERIFY_PEER / NONE as before.
+	// Configure verification mode. On a server ClientAuth alone decides,
+	// including NoClientCert, which asks for nothing. A client verifies
+	// its peer unless InsecureSkipVerify says otherwise.
 	switch {
-	case c.config.InsecureSkipVerify:
+	case c.isClient && c.config.InsecureSkipVerify:
+		wolfSSL.WolfSSL_CTX_set_verify(c.ctx, wolfSSL.SSL_VERIFY_NONE)
+	case !c.isClient && c.config.ClientAuth == NoClientCert:
 		wolfSSL.WolfSSL_CTX_set_verify(c.ctx, wolfSSL.SSL_VERIFY_NONE)
 	case !c.isClient && c.config.ClientAuth != NoClientCert:
-		mode := wolfSSL.SSL_VERIFY_NONE
+		// Seed with SSL_VERIFY_PEER so a ClientAuth value outside
+		// the defined set falls back to requesting a certificate.
+		// A bad value is a caller bug either way, but it should not
+		// silently disable client auth.
+		mode := wolfSSL.SSL_VERIFY_PEER
 		switch c.config.ClientAuth {
 		case RequestClientCert, VerifyClientCertIfGiven:
 			mode = wolfSSL.SSL_VERIFY_PEER

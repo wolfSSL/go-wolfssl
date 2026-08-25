@@ -170,7 +170,9 @@ func (c *Conn) doHandshake() error {
 	}
 
 	// A client with verification enabled must set ServerName; without it the
-	// certificate name is never checked, so reject rather than proceed.
+	// certificate name is never checked, so reject rather than proceed. This is
+	// enforced to match crypto/tls, which requires either ServerName or
+	// InsecureSkipVerify when verifying.
 	if c.isClient && !c.config.InsecureSkipVerify && c.config.ServerName == "" {
 		return errors.New("wolftls: either ServerName or InsecureSkipVerify must be specified")
 	}

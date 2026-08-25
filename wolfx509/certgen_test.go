@@ -231,6 +231,71 @@ func TestCreateCASignedCert(t *testing.T) {
 	}
 }
 
+func TestCASignParsedPublicKeySerialGeneration(t *testing.T) {
+	caKey, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer caKey.Free()
+
+	caTmpl := &Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               Name{CommonName: "auto serial CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              KeyUsageCertSign,
+	}
+	caDER, err := CreateCertificate(caTmpl, caTmpl, caKey, caKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate(CA): %v", err)
+	}
+	caCert, err := ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("ParseCertificate(CA): %v", err)
+	}
+	defer caCert.Free()
+
+	// The subject key as a CA sees it: parsed from a certificate, so
+	// public-key-only and carrying no RNG.
+	subjectDER, err := CreateCertificate(caTmpl, caTmpl, caKey, caKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate(subject): %v", err)
+	}
+	subject, err := ParseCertificate(subjectDER)
+	if err != nil {
+		t.Fatalf("ParseCertificate(subject): %v", err)
+	}
+	defer subject.Free()
+	if subject.PublicKey == nil {
+		t.Fatal("parsed certificate carries no PublicKey")
+	}
+	if subject.PublicKey.CRngPtr() != nil {
+		t.Error("a parsed public key should report no RNG")
+	}
+
+	leafTmpl := &Certificate{
+		// No SerialNumber here: CreateCertificate has to generates one.
+		Subject:   Name{CommonName: "auto serial leaf"},
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+	}
+	leafDER, err := CreateCertificate(leafTmpl, caCert, subject.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("CA-signing a parsed public key with an auto serial: %v", err)
+	}
+
+	leaf, err := ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatalf("ParseCertificate(leaf): %v", err)
+	}
+	defer leaf.Free()
+	if leaf.SerialNumber == nil || leaf.SerialNumber.Sign() == 0 {
+		t.Errorf("expected a generated serial, got %v", leaf.SerialNumber)
+	}
+}
+
 func TestCreateCertificateRequest(t *testing.T) {
 	k, err := GenerateP256Key()
 	if err != nil {

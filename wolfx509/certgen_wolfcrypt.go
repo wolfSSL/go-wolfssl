@@ -157,6 +157,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	if signerKey == nil {
 		return nil, errors.New("wolfx509: signerKey is nil")
 	}
+	if signerKey.CRngPtr() == nil {
+		return nil, errors.New("wolfx509: signerKey has no RNG, and cannot sign")
+	}
 	if pubKey.Algorithm() != signerKey.Algorithm() {
 		return nil, fmt.Errorf("wolfx509: pubKey algorithm %d does not match signerKey algorithm %d",
 			pubKey.Algorithm(), signerKey.Algorithm())
@@ -258,8 +261,7 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 		if isCSR {
 			bodySz = int(C.wc_MakeCertReq(&cert, derPtr, derCap, nil, pubEcc))
 		} else {
-			pubRng := (*C.WC_RNG)(pubKey.CRngPtr())
-			bodySz = int(C.wc_MakeCert(&cert, derPtr, derCap, nil, pubEcc, pubRng))
+			bodySz = int(C.wc_MakeCert(&cert, derPtr, derCap, nil, pubEcc, signerRng))
 		}
 		if bodySz < 0 {
 			return nil, fmt.Errorf("wolfCrypt: body build failed: %d", bodySz)

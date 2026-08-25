@@ -51,6 +51,12 @@ package wolfx509
 //     return -174;
 // }
 // #endif
+//
+// /* Cert.basicConstSet is a C bitfield, which cgo cannot address
+//  * without a setter. */
+// static void wolfx509_set_basic_const(Cert* cert, int toggle) {
+//     cert->basicConstSet = (toggle != 0);
+// }
 import "C"
 import (
 	"encoding/asn1"
@@ -120,6 +126,9 @@ type certBuildOpts struct {
 	DNSNames    []string  // SubjectAltName dNSName entries
 	IPAddresses []net.IP  // SubjectAltName iPAddress entries
 
+	// BasicConstraintsValid requests the BasicConstraints extension.
+	BasicConstraintsValid bool
+
 	// AcmeKeyAuth, if non-empty, sets the RFC 8737 id-pe-acmeIdentifier
 	// (1.3.6.1.5.5.7.1.31) extension on the cert. Pass the raw keyAuth
 	// bytes (token "." JWK_thumbprint per RFC 8555 §8.1); wolfCrypt
@@ -185,8 +194,16 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 	cert.version = 2
 	cert.sigType = C.int(sigType)
-	if opts.IsCA {
-		cert.isCA = 1
+	// BasicConstraints: emitted only when BasicConstraintsValid is set, has to
+	// be marked CRITICAL if set.
+	// When IsCA is TRUE, wolfSSL will automatically encode the extension.
+	if opts.BasicConstraintsValid {
+		cert.basicConstCrit = 1
+		if opts.IsCA {
+			cert.isCA = 1
+		} else {
+			C.wolfx509_set_basic_const(&cert, 1)
+		}
 	}
 	cert.keyUsage = C.word16(opts.KeyUsage)
 	cert.extKeyUsage = C.byte(opts.ExtKeyUsage)

@@ -129,6 +129,35 @@ package wolfSSL
 //     (void)key; return -174;
 // }
 // #endif
+// /* unlock/op/lock must stay inside one cgo call; see fips.go */
+// static int wc_ecc_export_private_only_Unlocked(ecc_key* key, byte* out,
+//                                                word32* outLen)
+// {
+//     int ret;
+//     PRIVATE_KEY_UNLOCK();
+//     ret = wc_ecc_export_private_only(key, out, outLen);
+//     PRIVATE_KEY_LOCK();
+//     return ret;
+// }
+// static int wc_ecc_export_x963_ex_Unlocked(ecc_key* key, byte* out,
+//                                           word32* outLen, int compressed)
+// {
+//     int ret;
+//     PRIVATE_KEY_UNLOCK();
+//     ret = wc_ecc_export_x963_ex(key, out, outLen, compressed);
+//     PRIVATE_KEY_LOCK();
+//     return ret;
+// }
+// static int wc_ecc_shared_secret_Unlocked(ecc_key* private_key,
+//                                          ecc_key* public_key,
+//                                          byte* out, word32* outLen)
+// {
+//     int ret;
+//     PRIVATE_KEY_UNLOCK();
+//     ret = wc_ecc_shared_secret(private_key, public_key, out, outLen);
+//     PRIVATE_KEY_LOCK();
+//     return ret;
+// }
 import "C"
 import (
     "unsafe"
@@ -165,10 +194,8 @@ func Wc_ecc_export_private_only(key *C.struct_ecc_key, out []byte, outLen *int) 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
-    PRIVATE_KEY_UNLOCK()
-    ret := int(C.wc_ecc_export_private_only(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen))
+    ret := int(C.wc_ecc_export_private_only_Unlocked(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
-    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -177,10 +204,8 @@ func Wc_ecc_export_x963_ex(key *C.struct_ecc_key, out []byte, outLen *int, compr
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
-    PRIVATE_KEY_UNLOCK()
-    ret := int(C.wc_ecc_export_x963_ex(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen, C.int(compressed)))
+    ret := int(C.wc_ecc_export_x963_ex_Unlocked(key, (*C.byte)(unsafe.Pointer(&out[0])), &cOutLen, C.int(compressed)))
     *outLen = int(cOutLen)
-    PRIVATE_KEY_LOCK()
     return ret
 }
 
@@ -254,10 +279,8 @@ func Wc_ecc_shared_secret(privKey, pubKey *C.struct_ecc_key, out []byte, outLen 
         return BAD_FUNC_ARG
     }
     cOutLen := C.word32(*outLen)
-    PRIVATE_KEY_UNLOCK()
-    ret := int(C.wc_ecc_shared_secret(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
+    ret := int(C.wc_ecc_shared_secret_Unlocked(privKey, pubKey, (*C.uchar)(unsafe.Pointer(&out[0])), &cOutLen))
     *outLen = int(cOutLen)
-    PRIVATE_KEY_LOCK()
     return ret
 }
 

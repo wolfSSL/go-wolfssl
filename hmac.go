@@ -45,6 +45,18 @@ package wolfSSL
 //     free(ptr);
 // }
 // #endif
+// /* unlock/op/lock must stay inside one cgo call; see fips.go */
+// static int wc_HKDF_Unlocked(int type, const byte* inKey, word32 inKeySz,
+//                             const byte* salt, word32 saltSz,
+//                             const byte* info, word32 infoSz,
+//                             byte* out, word32 outSz)
+// {
+//     int ret;
+//     PRIVATE_KEY_UNLOCK();
+//     ret = wc_HKDF(type, inKey, inKeySz, salt, saltSz, info, infoSz, out, outSz);
+//     PRIVATE_KEY_LOCK();
+//     return ret;
+// }
 import "C"
 import (
     "unsafe"
@@ -119,12 +131,9 @@ func Wc_HKDF(hashType int, inputKey []byte, inputKeySz int, salt []byte,
     if len(info) > 0 {
         infoPtr = (*C.uchar)(unsafe.Pointer(&info[0]))
     }
-    PRIVATE_KEY_UNLOCK()
-    ret := int(C.wc_HKDF(C.int(hashType), ikmPtr,
+    return int(C.wc_HKDF_Unlocked(C.int(hashType), ikmPtr,
                C.word32(inputKeySz), saltPtr,
                C.word32(saltSz), infoPtr,
                C.word32(infoSz), (*C.uchar)(unsafe.Pointer(&out[0])),
                C.word32(outSz)))
-    PRIVATE_KEY_LOCK()
-    return ret
 }

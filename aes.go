@@ -115,6 +115,17 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// /* unlock/op/lock must stay inside one cgo call; see fips.go */
+// static int wc_PBKDF2_Unlocked(byte* output, const byte* passwd, int pLen,
+//                               const byte* salt, int sLen, int iterations,
+//                               int kLen, int typeH)
+// {
+//     int ret;
+//     PRIVATE_KEY_UNLOCK();
+//     ret = wc_PBKDF2(output, passwd, pLen, salt, sLen, iterations, kLen, typeH);
+//     PRIVATE_KEY_LOCK();
+//     return ret;
+// }
 import "C"
 import (
     "unsafe"
@@ -274,10 +285,7 @@ func Wc_PBKDF2(out []byte, pwd []byte, pLen int, salt []byte, saltLen int, iter 
     if len(salt) > 0 {
         saltPtr = (*C.uchar)(unsafe.Pointer(&salt[0]))
     }
-    PRIVATE_KEY_UNLOCK()
-    ret := int(C.wc_PBKDF2(outPtr, pwdPtr, C.int(pLen),
+    return int(C.wc_PBKDF2_Unlocked(outPtr, pwdPtr, C.int(pLen),
                saltPtr, C.int(saltLen), C.int(iter), C.int(kLen), C.int(typeH)))
-    PRIVATE_KEY_LOCK()
-    return ret
 }
 

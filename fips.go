@@ -30,7 +30,6 @@ package wolfSSL
 //      return -174;
 //  }
 // #endif
-// #define WC_SPKRE_F(x,y) wolfCrypt_SetPrivateKeyReadEnable_fips((x),(y))
 // #ifdef HAVE_FIPS
 // int WC_PRIVATE_KEY_LOCK(void) {
 //      return WC_SPKRE_F(0,WC_KEYTYPE_ALL);
@@ -76,10 +75,32 @@ func Wc_SetDefaultSeed_Cb() int {
     return int(C.wc_SetSeed_Cb((C.wc_RngSeed_Cb)(C.wc_GenerateSeed)))
 }
 
+// FIPS private-key gate.
+//
+// wolfCrypt's FIPS APIs refuse to read private-key material unless the
+// calling thread has enabled it. In userspace builds that enable flag is
+// per-OS-thread instead of process-wide.
+//
+// A goroutine is pinned to its OS thread only for the duration of a single
+// cgo call. Calling PRIVATE_KEY_UNLOCK, then the wolfCrypt operation, then
+// PRIVATE_KEY_LOCK as three separate cgo calls therefore leaves a window in
+// which the scheduler can move the goroutine to another thread. The
+// operation then runs on a thread whose counter was never incremented and
+// fails with FIPS_PRIVATE_KEY_LOCKED_E (-287), while the thread that took
+// the unlock is left permanently unlocked.
+//
+// The Wc_* wrappers in this go-wolfssl avoid that by performing unlock,
+// operation and lock inside one static C helper (wc_HKDF_Unlocked,
+// wc_PBKDF2_Unlocked, ...).
+//
+// PRIVATE_KEY_LOCK and PRIVATE_KEY_UNLOCK are exported but they act on the
+// calling OS thread's counter, so any direct callers must hold
+// runtime.LockOSThread() across the entire unlock/operation/lock sequence.
 func PRIVATE_KEY_LOCK() int {
     return int(C.WC_PRIVATE_KEY_LOCK())
 }
 
+// See PRIVATE_KEY_LOCK for the threading requirements.
 func PRIVATE_KEY_UNLOCK() int {
     return int(C.WC_PRIVATE_KEY_UNLOCK())
 }

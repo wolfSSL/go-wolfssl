@@ -72,13 +72,19 @@ type Certificate struct {
 
 // Config structures a TLS connection's parameters.
 type Config struct {
-	// ServerName is the value sent in the SNI extension. For clients,
-	// it is also used for hostname verification unless InsecureSkipVerify is set.
+	// ServerName is the value sent in the SNI extension and, for clients, is
+	// used for hostname verification. A client that verifies the peer
+	// (InsecureSkipVerify == false) must set ServerName: otherwise the
+	// certificate name is never checked, so doHandshake rejects the connection
+	// before the handshake, matching crypto/tls. Set InsecureSkipVerify to
+	// connect without a ServerName.
 	ServerName string
 
 	// InsecureSkipVerify disables wolfSSL's built-in certificate verification.
-	// When true, the VerifyConnection callback (if set) is still called after
-	// the handshake so the caller can perform custom verification.
+	// It is also the alternative to setting ServerName: when false, a client
+	// must provide ServerName so the certificate name can be checked. When
+	// true, the VerifyConnection callback (if set) is still called after the
+	// handshake so the caller can perform custom verification.
 	//
 	// This determines how a client verifies the server, setting it on a
 	// server is a no-op.

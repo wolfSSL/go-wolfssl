@@ -31,7 +31,7 @@ package wolfSSL
 // #include <wolfssl/openssl/asn1.h>
 // #include <wolfssl/openssl/objects.h>
 // #include <wolfssl/openssl/crypto.h>
-// #ifndef OPENSSL_ALL
+// #ifndef OPENSSL_EXTRA
 // typedef struct WOLFSSL_X509 {} WOLFSSL_X509;
 // typedef struct WOLFSSL_X509_STORE {} WOLFSSL_X509_STORE;
 // typedef struct WOLFSSL_STACK {} WOLFSSL_STACK;
@@ -47,12 +47,6 @@ package wolfSSL
 //                                 WOLFSSL_X509* cert, WOLFSSL_STACK* chain) { return -174; }
 // static int X509_verify_cert(WOLFSSL_X509_STORE_CTX* ctx) { return -174; }
 // static int X509_STORE_add_cert(WOLFSSL_X509_STORE* store, WOLFSSL_X509* x509) { return -174; }
-// static int wolfSSL_X509_up_ref(WOLFSSL_X509* x509) { (void)x509; return -174; }
-// static int wolfSSL_X509_STORE_CTX_get_error(WOLFSSL_X509_STORE_CTX* ctx) { (void)ctx; return 0; }
-// enum {
-//     WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT       = 18,
-//     WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY = 20
-// };
 // static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return NULL; }
 // static int wolfSSL_X509_get_pubkey_buffer(WOLFSSL_X509* x509, unsigned char* buf, int* bufSz) { return -174; }
 // typedef struct WOLFSSL_BIO {} WOLFSSL_BIO;
@@ -150,6 +144,16 @@ package wolfSSL
 // int wolfSSL_i2d_X509(WOLFSSL_X509* x509, unsigned char** out) {
 //     (void)x509; (void)out; return -174;
 // }
+// #endif
+// #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL)
+// static int wolfSSL_X509_up_ref(WOLFSSL_X509* x509) { (void)x509; return -174; }
+// #endif
+// #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL) && \
+//     !defined(HAVE_WEBSERVER) && !defined(HAVE_MEMCACHED)
+// enum {
+//     WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT       = 18,
+//     WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY = 20
+// };
 // #endif
 // #include <string.h>
 import "C"

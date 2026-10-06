@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"runtime"
@@ -29,68 +30,95 @@ import (
 	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 
-// CertPool is a set of trusted CA certificates used during chain
-// verification. It wraps a wolfSSL WOLFSSL_CERT_MANAGER; certificates
-// are added via AppendCertsFromPEM or AddCert.
+// CertPool is a set of certificates for chain verification.
 type CertPool struct {
-	mu sync.RWMutex
-	cm *wolfSSL.WOLFSSL_CERT_MANAGER
+	mu    sync.RWMutex
+	store *wolfSSL.WOLFSSL_X509_STORE
+	certs []*wolfSSL.WOLFSSL_X509 // pool's own references; Free releases them.
 }
 
-// NewCertPool returns an empty pool backed by a fresh CertManager.
+// NewCertPool returns an empty pool.
 func NewCertPool() *CertPool {
-	p := &CertPool{cm: wolfSSL.WolfSSL_CertManagerNew()}
-	runtime.SetFinalizer(p, (*CertPool).finalize)
-	return p
+	pool := &CertPool{store: wolfSSL.WolfSSL_X509_STORE_new()}
+	runtime.SetFinalizer(pool, (*CertPool).finalize)
+	return pool
 }
 
-// Free releases the underlying CertManager. Safe to call multiple times.
-func (p *CertPool) Free() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cm != nil {
-		wolfSSL.WolfSSL_CertManagerFree(p.cm)
-		p.cm = nil
+// Free releases the store and the pool's certificate references. Callers'
+// *Certificate values are not affected.
+func (pool *CertPool) Free() {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.store != nil {
+		wolfSSL.WolfSSL_X509_STORE_free(pool.store)
+		pool.store = nil
 	}
-	runtime.SetFinalizer(p, nil)
+	for _, x509 := range pool.certs {
+		wolfSSL.WolfSSL_X509_free(x509)
+	}
+	pool.certs = nil
+	runtime.SetFinalizer(pool, nil)
 }
 
-func (p *CertPool) finalize() { p.Free() }
+func (pool *CertPool) finalize() { pool.Free() }
 
-// AppendCertsFromPEM loads one or more PEM-encoded CA certificates into the
-// pool. Returns true on success. Mirrors crypto/x509.CertPool.AppendCertsFromPEM.
-func (p *CertPool) AppendCertsFromPEM(pem []byte) bool {
-	if len(pem) == 0 {
-		return false
+// AppendCertsFromPEM parses PEM-encoded certificates and adds each via
+// AddCert. Returns true if any cert was added.
+func (pool *CertPool) AppendCertsFromPEM(pemCerts []byte) bool {
+	var ok bool
+	rest := pemCerts
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		if pool.AddCert(cert) == nil {
+			ok = true
+		}
+		cert.Free() // the pool holds its own reference
 	}
-	// Write lock: wolfSSL_CertManagerLoadCABuffer mutates the cert manager,
-	// and concurrent loads on the same manager are not safe.
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cm == nil {
-		return false
-	}
-	return wolfSSL.WolfSSL_CertManagerLoadCABuffer(p.cm, pem, wolfSSL.SSL_FILETYPE_PEM) == wolfSSL.WOLFSSL_SUCCESS
+	return ok
 }
 
-// AddCert appends a single certificate to the pool via wolfSSL's
-// CertManagerLoadCABuffer in DER mode. Unlike crypto/x509.CertPool.AddCert
-// (which is infallible because the cert is already parsed in Go memory),
-// wolfSSL re-parses the DER inside its cert manager and can reject it.
-// Callers must check the returned error; a silent failure here leads to
-// chains not verifying later with no clue why.
-func (p *CertPool) AddCert(c *Certificate) error {
-	if c == nil || len(c.Raw) == 0 {
-		return errors.New("wolfx509: AddCert: nil certificate or empty DER")
+// AddCert adds cert to the pool. The caller keeps
+// ownership of cert: the pool takes its own reference to the underlying X509,
+// so cert may be freed, or added to other pools, independently.
+func (pool *CertPool) AddCert(cert *Certificate) error {
+	if cert == nil {
+		return errors.New("wolfx509: AddCert: nil certificate")
 	}
-	// Write lock: see AppendCertsFromPEM.
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cm == nil {
-		return errors.New("wolfx509: AddCert: pool already freed")
+	cert.mu.RLock()
+	x509 := cert.x
+	ret := wolfSSL.WOLFSSL_SUCCESS
+	if x509 != nil {
+		ret = wolfSSL.WolfSSL_X509_up_ref(x509)
 	}
-	if ret := wolfSSL.WolfSSL_CertManagerLoadCABuffer(p.cm, c.Raw, wolfSSL.SSL_FILETYPE_ASN1); ret != wolfSSL.WOLFSSL_SUCCESS {
-		return fmt.Errorf("wolfx509: AddCert: wolfSSL rejected DER (%d)", ret)
+	cert.mu.RUnlock()
+	if x509 == nil {
+		return errors.New("wolfx509: AddCert: certificate is not parsed (use ParseCertificate) or was freed")
 	}
+	if ret != wolfSSL.WOLFSSL_SUCCESS {
+		return fmt.Errorf("wolfx509: AddCert: X509_up_ref failed (%d)", ret)
+	}
+	// From here on x509 is our reference: release it on any failure.
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.store == nil {
+		wolfSSL.WolfSSL_X509_free(x509)
+		return errors.New("wolfx509: AddCert: pool was freed or failed to initialize")
+	}
+	if ret := wolfSSL.WolfSSL_X509_STORE_add_cert(pool.store, x509); ret != wolfSSL.WOLFSSL_SUCCESS {
+		wolfSSL.WolfSSL_X509_free(x509)
+		return fmt.Errorf("wolfx509: AddCert: X509_STORE_add_cert failed (%d)", ret)
+	}
+	pool.certs = append(pool.certs, x509)
 	return nil
 }

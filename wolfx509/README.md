@@ -17,8 +17,13 @@ entirely on wolfCrypt-owned key handles.
 - `GenerateP256Key()` — convenience factory returning a
   `*handles.EccKey`.
 - `(c *Certificate) Verify(opts VerifyOptions)` — chain verification
-  via wolfSSL's CertManager. Note: `VerifyOptions.CurrentTime` is
-  currently ignored; wolfSSL uses the system clock.
+  via wolfSSL's `X509_verify_cert`. Only self-signed certificates in
+  `Roots` are trust anchors; unlike `crypto/x509`, a non-self-signed CA
+  in `Roots` is not trusted unless its self-signed root is also there.
+  A non-zero `VerifyOptions.CurrentTime` is rejected, because
+  wolfSSL always uses the system clock. Concurrent calls that share a
+  `Roots` pool run one at a time, because wolfSSL doesn't support
+  concurrent verification on one X509_STORE.
 - `(c *Certificate) PublicECCRawXY()` — raw `(X, Y)` point export
   for ECDSA-P256 leaves.
 

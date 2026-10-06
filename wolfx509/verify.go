@@ -30,29 +30,14 @@ import (
 // VerifyOptions carries the parameters for certificate chain verification.
 // Mirrors crypto/x509.VerifyOptions (minimal subset).
 type VerifyOptions struct {
-	// Roots is the set of trusted CA certificates. Required: Verify
-	// returns an error if Roots is nil. Self-signed leaves must be in
-	// the pool to validate.
-	Roots *CertPool
-
-	// Intermediates is unused — wolfSSL's CertManager-based path can't
-	// consume a separate intermediates pool. Verify rejects opts where
-	// Intermediates is non-nil rather than silently dropping the data;
-	// callers should AppendCertsFromPEM intermediates into Roots.
-	Intermediates *CertPool
-
-	// DNSName, if non-empty, is also checked against the leaf's SANs/CN
-	// after chain verification succeeds.
-	DNSName string
-
-	// CurrentTime is unused — wolfSSL always uses the system clock.
-	// Verify rejects opts where CurrentTime is non-zero.
-	CurrentTime time.Time
+	Roots         *CertPool     // trust anchors; required.
+	Intermediates *CertPool     // wire-presented intermediates; optional.
+	DNSName       string        // checked against SANs after chain verify.
+	CurrentTime   time.Time     // rejected if non-zero (wolfSSL uses system clock).
 }
 
-// Verify validates c against opts.Roots, then (if DNSName is set) runs
-// VerifyHostname. Returns a chain slice for crypto/x509 API symmetry;
-// current callers only check err.
+// Verify runs wolfSSL_X509_verify_cert against Roots, using Intermediates
+// as the untrusted chain. wolfSSL enforces CA:TRUE per RFC 5280.
 func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -62,33 +47,79 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 	if opts.Roots == nil {
 		return nil, fmt.Errorf("%w: no roots provided", ErrVerifyFailed)
 	}
-	// Fail loudly: wolfSSL's CertManager-based path doesn't honor Intermediates
-	// or CurrentTime (see field docs). Callers must AppendCertsFromPEM
-	// intermediates into Roots and accept the system clock for time checks.
-	if opts.Intermediates != nil {
-		return nil, fmt.Errorf("%w: Intermediates not supported; load into Roots instead", ErrVerifyFailed)
-	}
 	if !opts.CurrentTime.IsZero() {
 		return nil, fmt.Errorf("%w: CurrentTime not supported; wolfSSL uses the system clock", ErrVerifyFailed)
 	}
 
-	opts.Roots.mu.RLock()
-	defer opts.Roots.mu.RUnlock()
-	if opts.Roots.cm == nil {
-		return nil, fmt.Errorf("%w: roots pool is closed", ErrVerifyFailed)
+	// Take our own reference on each intermediate so we don't need to hold
+	// the Intermediates lock during verification; a concurrent Free of that
+	// pool can't release them while wolfSSL is using them.
+	var intermediates []*wolfSSL.WOLFSSL_X509
+	defer func() {
+		for _, x509 := range intermediates {
+			wolfSSL.WolfSSL_X509_free(x509)
+		}
+	}()
+	if opts.Intermediates != nil {
+		opts.Intermediates.mu.RLock()
+		upRefOK := true
+		for _, x509 := range opts.Intermediates.certs {
+			if wolfSSL.WolfSSL_X509_up_ref(x509) != wolfSSL.WOLFSSL_SUCCESS {
+				upRefOK = false
+				break
+			}
+			intermediates = append(intermediates, x509)
+		}
+		opts.Intermediates.mu.RUnlock()
+		if !upRefOK {
+			return nil, fmt.Errorf("%w: X509_up_ref failed on intermediate", ErrVerifyFailed)
+		}
 	}
 
-	ret := wolfSSL.WolfSSL_CertManagerVerifyBuffer(opts.Roots.cm, c.Raw)
-	if ret != wolfSSL.WOLFSSL_SUCCESS {
-		baseErr := fmt.Errorf("%w: wolfSSL_CertManagerVerifyBuffer ret=%d", ErrVerifyFailed, ret)
-		// wolfSSL's CertManager returns ASN_NO_SIGNER_E (-188) when the
-		// chain can't be rooted in our CA pool. Surface that as an
-		// UnknownAuthorityError for stdlib-style errors.As dispatch.
-		const ASN_NO_SIGNER_E = -188
-		if ret == ASN_NO_SIGNER_E {
-			return nil, UnknownAuthorityError{Cert: c, err: baseErr}
+	stack := wolfSSL.WolfSSL_sk_X509_new_null()
+	if stack == nil {
+		return nil, fmt.Errorf("%w: sk_X509_new_null failed", ErrVerifyFailed)
+	}
+	defer wolfSSL.WolfSSL_sk_X509_free(stack)
+	for _, x509 := range intermediates {
+		if ret := wolfSSL.WolfSSL_sk_X509_push(stack, x509); ret <= 0 {
+			return nil, fmt.Errorf("%w: sk_X509_push failed (ret=%d)", ErrVerifyFailed, ret)
 		}
-		return nil, baseErr
+	}
+
+	// Exclusive lock: X509_verify_cert mutates the store (injects
+	// intermediates into store->certs, loads/unloads TEMP_CA signers in its
+	// CertManager), and wolfSSL does not support concurrent verifies on one
+	// store.
+	opts.Roots.mu.Lock()
+	defer opts.Roots.mu.Unlock()
+	if opts.Roots.store == nil {
+		return nil, fmt.Errorf("%w: roots pool was freed or failed to initialize", ErrVerifyFailed)
+	}
+
+	ctx := wolfSSL.WolfSSL_X509_STORE_CTX_new()
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: X509_STORE_CTX_new failed", ErrVerifyFailed)
+	}
+	defer wolfSSL.WolfSSL_X509_STORE_CTX_free(ctx)
+
+	if ret := wolfSSL.WolfSSL_X509_STORE_CTX_init(ctx, opts.Roots.store, c.x, stack); ret != wolfSSL.WOLFSSL_SUCCESS {
+		return nil, fmt.Errorf("%w: X509_STORE_CTX_init failed (ret=%d)", ErrVerifyFailed, ret)
+	}
+
+	if ret := wolfSSL.WolfSSL_X509_verify_cert(ctx); ret != wolfSSL.WOLFSSL_SUCCESS {
+		code := wolfSSL.WolfSSL_X509_STORE_CTX_get_error(ctx)
+		if code == 0 {
+			return nil, fmt.Errorf("%w: X509_verify_cert failed (ret=%d)", ErrVerifyFailed, ret)
+		}
+		verifyErr := fmt.Errorf("%w: X509_V_ERR %d", ErrVerifyFailed, code)
+		// Callers may check errors.As(err, &UnknownAuthorityError{}) as with crypto/x509, so return it for "no trusted issuer" codes.
+		switch code {
+		case wolfSSL.WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+			wolfSSL.WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
+			return nil, UnknownAuthorityError{Cert: c, err: verifyErr}
+		}
+		return nil, verifyErr
 	}
 
 	if opts.DNSName != "" {
@@ -97,6 +128,5 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 		}
 	}
 
-	// Return a placeholder single-element chain — callers only check err.
 	return [][]*Certificate{{c}}, nil
 }

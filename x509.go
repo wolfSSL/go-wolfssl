@@ -31,7 +31,7 @@ package wolfSSL
 // #include <wolfssl/openssl/asn1.h>
 // #include <wolfssl/openssl/objects.h>
 // #include <wolfssl/openssl/crypto.h>
-// #ifndef OPENSSL_ALL
+// #ifndef OPENSSL_EXTRA
 // typedef struct WOLFSSL_X509 {} WOLFSSL_X509;
 // typedef struct WOLFSSL_X509_STORE {} WOLFSSL_X509_STORE;
 // typedef struct WOLFSSL_STACK {} WOLFSSL_STACK;
@@ -46,6 +46,7 @@ package wolfSSL
 // static int X509_STORE_CTX_init(WOLFSSL_X509_STORE_CTX* ctx, WOLFSSL_X509_STORE* store,
 //                                 WOLFSSL_X509* cert, WOLFSSL_STACK* chain) { return -174; }
 // static int X509_verify_cert(WOLFSSL_X509_STORE_CTX* ctx) { return -174; }
+// static int X509_STORE_add_cert(WOLFSSL_X509_STORE* store, WOLFSSL_X509* x509) { return -174; }
 // static WOLFSSL_X509* wolfSSL_X509_load_certificate_buffer(const unsigned char* buff, int sz, int type) { return NULL; }
 // static int wolfSSL_X509_get_pubkey_buffer(WOLFSSL_X509* x509, unsigned char* buf, int* bufSz) { return -174; }
 // typedef struct WOLFSSL_BIO {} WOLFSSL_BIO;
@@ -144,6 +145,16 @@ package wolfSSL
 //     (void)x509; (void)out; return -174;
 // }
 // #endif
+// #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL)
+// static int wolfSSL_X509_up_ref(WOLFSSL_X509* x509) { (void)x509; return -174; }
+// #endif
+// #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL) && \
+//     !defined(HAVE_WEBSERVER) && !defined(HAVE_MEMCACHED)
+// enum {
+//     WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT       = 18,
+//     WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY = 20
+// };
+// #endif
 // #include <string.h>
 import "C"
 import (
@@ -158,6 +169,9 @@ type WOLFSSL_BIO = C.struct_WOLFSSL_BIO
 type WOLFSSL_ASN1_OBJECT = C.struct_WOLFSSL_ASN1_OBJECT
 type WOLFSSL_X509_NAME = C.struct_WOLFSSL_X509_NAME
 type WOLFSSL_CERT_MANAGER = C.struct_WOLFSSL_CERT_MANAGER
+type WOLFSSL_X509_STORE = C.struct_WOLFSSL_X509_STORE
+type WOLFSSL_X509_STORE_CTX = C.struct_WOLFSSL_X509_STORE_CTX
+type WOLFSSL_STACK = C.struct_WOLFSSL_STACK
 
 // X509_STORE wrappers
 func WolfSSL_X509_STORE_new() *C.WOLFSSL_X509_STORE {
@@ -166,6 +180,12 @@ func WolfSSL_X509_STORE_new() *C.WOLFSSL_X509_STORE {
 
 func WolfSSL_X509_STORE_free(store *C.WOLFSSL_X509_STORE) {
 	C.X509_STORE_free(store)
+}
+
+// WolfSSL_X509_STORE_add_cert adds x509 to the store. The store takes its
+// own reference; the caller still owns x509.
+func WolfSSL_X509_STORE_add_cert(store *C.WOLFSSL_X509_STORE, x509 *C.WOLFSSL_X509) int {
+	return int(C.X509_STORE_add_cert(store, x509))
 }
 
 func WolfSSL_X509_STORE_load_locations(store *C.WOLFSSL_X509_STORE, capath string) int {
@@ -209,6 +229,19 @@ func WolfSSL_X509_STORE_CTX_init(ctx *C.WOLFSSL_X509_STORE_CTX, store *C.WOLFSSL
 func WolfSSL_X509_verify_cert(ctx *C.WOLFSSL_X509_STORE_CTX) int {
 	return int(C.X509_verify_cert(ctx))
 }
+
+// WolfSSL_X509_STORE_CTX_get_error returns the X509_V_ERR_* code recorded by
+// the last X509_verify_cert on ctx (or a negative wolfSSL error code when
+// wolfSSL has no X509_V_ERR mapping for it).
+func WolfSSL_X509_STORE_CTX_get_error(ctx *C.WOLFSSL_X509_STORE_CTX) int {
+	return int(C.wolfSSL_X509_STORE_CTX_get_error(ctx))
+}
+
+// X509_V_ERR codes meaning no trusted issuer was found.
+const (
+	WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT       = C.WOLFSSL_X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT
+	WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY = C.WOLFSSL_X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+)
 
 func WolfSSL_X509_load_certificate_buffer(buff []byte, buffSz int, certType int) *C.WOLFSSL_X509 {
 	if buffSz < 0 || buffSz > len(buff) || len(buff) == 0 { return nil }
@@ -268,6 +301,12 @@ func WolfSSL_i2d_X509(x509 *WOLFSSL_X509, out *[]byte) int {
 
 func WolfSSL_X509_free(x509 *WOLFSSL_X509) {
 	C.wolfSSL_X509_free((*C.struct_WOLFSSL_X509)(x509))
+}
+
+// WolfSSL_X509_up_ref takes an extra reference; release it with
+// WolfSSL_X509_free.
+func WolfSSL_X509_up_ref(x509 *WOLFSSL_X509) int {
+	return int(C.wolfSSL_X509_up_ref((*C.struct_WOLFSSL_X509)(x509)))
 }
 
 func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen int) int {

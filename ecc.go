@@ -402,7 +402,10 @@ func Wc_KeyPemToDer(pem []byte, out []byte, pass string) int {
         return BAD_FUNC_ARG
     }
     cPass := C.CString(pass)
-    defer C.free(unsafe.Pointer(cPass))
+    defer func() {
+        C.wc_ForceZero(unsafe.Pointer(cPass), C.size_t(len(pass)+1))
+        C.free(unsafe.Pointer(cPass))
+    }()
     var outPtr *C.uchar
     if len(out) > 0 {
         outPtr = (*C.uchar)(unsafe.Pointer(&out[0]))

@@ -2,6 +2,7 @@ package wolfSSL
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"strconv"
 	"testing"
@@ -836,5 +837,45 @@ func TestBlake2sFinalDefaultSizeShortOutput(t *testing.T) {
 	}
 	if ret := Wc_Blake2sFinal(b2s, buf, 0); ret != 0 {
 		t.Fatalf("full out with default size: %d", ret)
+	}
+}
+
+func testEccPem(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	key := new(Ecc_key)
+	if ret := Wc_ecc_init(key); ret == notCompiledE {
+		t.Skip("ECC not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_ecc_init: %d", ret)
+	}
+	defer Wc_ecc_free(key)
+	if ret := Wc_ecc_make_key(rng, 32, key); ret == notCompiledE {
+		t.Skip("ECC not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_ecc_make_key: %d", ret)
+	}
+	der := make([]byte, 256)
+	n := Wc_EccKeyToDer(key, der)
+	if n <= 0 {
+		t.Fatalf("Wc_EccKeyToDer: %d", n)
+	}
+	der = der[:n]
+	pem := "-----BEGIN EC PRIVATE KEY-----\n" +
+		base64.StdEncoding.EncodeToString(der) +
+		"\n-----END EC PRIVATE KEY-----\n"
+	return []byte(pem), der
+}
+
+func TestKeyPemToDerWithPassphrase(t *testing.T) {
+	pem, der := testEccPem(t)
+	out := make([]byte, 512)
+	n := Wc_KeyPemToDer(pem, out, "passphrase")
+	if n == notCompiledE {
+		t.Skip("PEM decoding not compiled")
+	}
+	if n != len(der) || !bytes.Equal(out[:n], der) {
+		t.Fatalf("Wc_KeyPemToDer: got %d, want %d matching bytes", n, len(der))
 	}
 }

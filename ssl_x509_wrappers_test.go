@@ -456,3 +456,18 @@ func TestDTLSCreatePeerRejectsEmbeddedNUL(t *testing.T) {
         t.Fatal("dtls_create_peer accepted an address containing NUL")
     }
 }
+
+func TestPSKIdentityHintRejectsEmbeddedNUL(t *testing.T) {
+    WolfSSL_Init()
+    ctx := WolfSSL_CTX_new_v23_server()
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    if WolfSSL_CTX_use_psk_identity_hint(ctx, "hint") == testNotCompiledIn {
+        t.Skip("wolfSSL built without PSK")
+    }
+    if ret := WolfSSL_CTX_use_psk_identity_hint(ctx, "hint\x00other"); ret != BAD_FUNC_ARG {
+        t.Fatalf("use_psk_identity_hint with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+}

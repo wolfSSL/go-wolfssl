@@ -251,6 +251,7 @@ func WolfSSL_CTX_set_psk_client_tls13_callback(ctx *C.struct_WOLFSSL_CTX, cb uns
 }
 
 func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) int {
+    if wrapperStringHasNUL(hint) { return BAD_FUNC_ARG }
     c_hint := C.CString(hint)
     defer C.free(unsafe.Pointer(c_hint))
     return int(C.wolfSSL_CTX_use_psk_identity_hint(ctx, c_hint))

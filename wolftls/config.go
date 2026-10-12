@@ -194,13 +194,11 @@ type Config struct {
 	// ClientAuth controls how the server handles client certificates.
 	// Ignored on the client side. NoClientCert (the zero value) requests
 	// no client certificate at all, and one sent anyway is not verified.
-	// When set to RequireAnyClientCert or
-	// RequireAndVerifyClientCert, the server will fail the handshake if
-	// the client does not present a certificate. When set to
-	// VerifyClientCertIfGiven or RequireAndVerifyClientCert, wolfSSL
-	// verifies the presented client cert against the pool loaded via
-	// RootCAPEMs (wolfSSL uses the same verify store for peer certs
-	// regardless of client/server role).
+	// Every other value requests a certificate and, unlike crypto/tls,
+	// verifies any certificate the client presents against RootCAPEMs, so
+	// RequestClientCert behaves as VerifyClientCertIfGiven and
+	// RequireAnyClientCert as RequireAndVerifyClientCert. The two Require
+	// values also fail the handshake when the client sends no certificate.
 	ClientAuth ClientAuthType
 }
 

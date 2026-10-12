@@ -250,5 +250,6 @@ func main() {
     } else {
         fmt.Println("Invalid operation. Please use enc or dec.");
         fmt.Println("Usage: ./aesEncrypt <infile name> <outfile name> <enc/dec> <key size>");
+        os.Exit(1)
     }
 }

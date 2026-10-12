@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -37,7 +38,10 @@ type VerifyOptions struct {
 }
 
 // Verify runs wolfSSL_X509_verify_cert against Roots, using Intermediates
-// as the untrusted chain. wolfSSL enforces CA:TRUE per RFC 5280.
+// as the untrusted chain. wolfSSL enforces CA:TRUE per RFC 5280. On success
+// it returns the single chain wolfSSL built, from a copy of c up to the
+// trust anchor. Every certificate in the chain is newly parsed and owned by
+// the caller, who may release each with Free.
 func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -128,5 +132,26 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 		}
 	}
 
-	return [][]*Certificate{{c}}, nil
+	ders := verifiedChainDER(ctx)
+	if len(ders) == 0 {
+		return nil, fmt.Errorf("%w: wolfSSL did not report the verified chain", ErrUnsupported)
+	}
+	if !bytes.Equal(ders[0], c.Raw) {
+		return nil, fmt.Errorf("%w: verified chain does not start with the leaf", ErrVerifyFailed)
+	}
+	var chain []*Certificate
+	freeChain := func() {
+		for _, parsed := range chain {
+			parsed.Free()
+		}
+	}
+	for _, der := range ders {
+		cert, err := ParseCertificate(der)
+		if err != nil {
+			freeChain()
+			return nil, fmt.Errorf("%w: parse verified chain: %v", ErrVerifyFailed, err)
+		}
+		chain = append(chain, cert)
+	}
+	return [][]*Certificate{chain}, nil
 }

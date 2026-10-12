@@ -33,12 +33,30 @@ package wolfx509
 //     *usage = wolfSSL_X509_get_keyUsage(x);
 //     return wolfSSL_X509_ext_isSet_by_NID(x, WC_NID_key_usage);
 // }
+// static int wolfx509_chain_num(WOLFSSL_X509_STORE_CTX* ctx) {
+//     WOLFSSL_STACK* sk = wolfSSL_X509_STORE_CTX_get_chain(ctx);
+//     return sk == NULL ? 0 : wolfSSL_sk_X509_num(sk);
+// }
+// static const unsigned char* wolfx509_chain_der(WOLFSSL_X509_STORE_CTX* ctx,
+//                                                int i, int* sz) {
+//     WOLFSSL_STACK* sk = wolfSSL_X509_STORE_CTX_get_chain(ctx);
+//     WOLFSSL_X509* x = sk == NULL ? NULL : wolfSSL_sk_X509_value(sk, i);
+//     *sz = 0;
+//     return x == NULL ? NULL : wolfSSL_X509_get_der(x, sz);
+// }
 // #else
 // static int wolfx509_basic_constraints(WOLFSSL_X509* x, int* isCA) {
 //     (void)x; *isCA = 0; return 0;
 // }
 // static int wolfx509_key_usage(WOLFSSL_X509* x, unsigned int* usage) {
 //     (void)x; *usage = 0; return 0;
+// }
+// static int wolfx509_chain_num(WOLFSSL_X509_STORE_CTX* ctx) {
+//     (void)ctx; return 0;
+// }
+// static const unsigned char* wolfx509_chain_der(WOLFSSL_X509_STORE_CTX* ctx,
+//                                                int i, int* sz) {
+//     (void)ctx; (void)i; *sz = 0; return NULL;
 // }
 // #endif
 import "C"
@@ -245,4 +263,21 @@ func parseSubjectAltName(c *Certificate, exts []certExtension) error {
 		}
 	}
 	return nil
+}
+
+// verifiedChainDER returns the DER of each certificate in the chain that
+// X509_verify_cert built in ctx, leaf first.
+func verifiedChainDER(ctx *wolfSSL.WOLFSSL_X509_STORE_CTX) [][]byte {
+	cctx := (*C.WOLFSSL_X509_STORE_CTX)(unsafe.Pointer(ctx))
+	n := int(C.wolfx509_chain_num(cctx))
+	out := make([][]byte, 0, n)
+	for i := 0; i < n; i++ {
+		var sz C.int
+		der := C.wolfx509_chain_der(cctx, C.int(i), &sz)
+		if der == nil || sz <= 0 {
+			return nil
+		}
+		out = append(out, C.GoBytes(unsafe.Pointer(der), sz))
+	}
+	return out
 }

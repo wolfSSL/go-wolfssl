@@ -591,3 +591,30 @@ func TestParseCertificateRejectsMalformedSANs(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyReturnsVerifiedChain(t *testing.T) {
+	leaf := parseCert(t, "client-int-cert.pem")
+	roots := newPool(t, "ca-cert.pem")
+	inter := newPool(t, "ca-int-cert.pem", "ca-int2-cert.pem")
+	chains, err := leaf.Verify(VerifyOptions{Roots: roots, Intermediates: inter})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := []string{"client-int-cert.pem", "ca-int2-cert.pem", "ca-int-cert.pem", "ca-cert.pem"}
+	if len(chains) != 1 || len(chains[0]) != len(want) {
+		t.Fatalf("got chains %v, want one chain of %d certificates", chains, len(want))
+	}
+	defer func() {
+		for _, c := range chains[0] {
+			c.Free()
+		}
+	}()
+	if chains[0][0] == leaf {
+		t.Error("chain reuses the caller's certificate instead of a caller-owned copy")
+	}
+	for i, f := range want {
+		if !chains[0][i].Equal(parseCert(t, f)) {
+			t.Errorf("chain[%d] is not %s", i, f)
+		}
+	}
+}

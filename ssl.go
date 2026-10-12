@@ -219,6 +219,7 @@ func WolfDTLSv1_3_client_method() *C.struct_WOLFSSL_METHOD {
 }
 
 func WolfSSL_dtls_create_peer(port int, ip string) unsafe.Pointer {
+    if wrapperStringHasNUL(ip) { return nil }
     c_ip := C.CString(ip)
     defer C.free(unsafe.Pointer(c_ip))
     return C.wolfSSL_dtls_create_peer(C.int(port), c_ip)

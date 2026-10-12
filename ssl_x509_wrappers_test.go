@@ -444,3 +444,15 @@ func TestOBJTxt2objRejectsEmbeddedNUL(t *testing.T) {
         t.Fatal("OBJ_txt2obj accepted text containing NUL")
     }
 }
+
+func TestDTLSCreatePeerRejectsEmbeddedNUL(t *testing.T) {
+    addr := WolfSSL_dtls_create_peer(4433, "127.0.0.1")
+    if addr == nil {
+        t.Skip("wolfSSL built without DTLS")
+    }
+    WolfSSL_dtls_free_peer(addr)
+    if addr := WolfSSL_dtls_create_peer(4433, "127.0.0.1\x00.attacker.test"); addr != nil {
+        WolfSSL_dtls_free_peer(addr)
+        t.Fatal("dtls_create_peer accepted an address containing NUL")
+    }
+}

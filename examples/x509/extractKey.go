@@ -85,7 +85,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Failed to hash public key DER:", ret)
 		os.Exit(1)
 	}
-	fmt.Printf("SHA484 hash of public key DER\n")
+	fmt.Printf("SHA384 hash of public key DER\n")
 	fmt.Printf("%x\n", digest)
 
 	var pubKey wolfSSL.Ecc_key

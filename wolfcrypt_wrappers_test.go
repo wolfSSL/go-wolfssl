@@ -738,3 +738,38 @@ func TestAesSetKeyRejectsShortIv(t *testing.T) {
 		t.Fatalf("short iv: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestAesCbcRejectsOversizedLength(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_AesInit: %d", ret)
+	}
+	defer Wc_AesFree(aes)
+	key := make([]byte, AES_128_KEY_SIZE)
+	iv := make([]byte, AES_IV_SIZE)
+	if ret := Wc_AesSetKey(aes, key, len(key), iv, AES_ENCRYPTION); ret == notCompiledE {
+		t.Skip("AES not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesSetKey: %d", ret)
+	}
+	if ret := Wc_AesCbcEncrypt(aes, make([]byte, AES_BLOCK_SIZE), make([]byte, AES_BLOCK_SIZE), AES_BLOCK_SIZE); ret == notCompiledE {
+		t.Skip("AES-CBC not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesCbcEncrypt: %d", ret)
+	}
+	if ret := Wc_AesCbcEncrypt(aes, huge, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_AesSetKey(aes, key, len(key), iv, AES_DECRYPTION); ret != 0 {
+		t.Fatalf("Wc_AesSetKey: %d", ret)
+	}
+	if ret := Wc_AesCbcDecrypt(aes, huge, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

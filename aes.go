@@ -184,14 +184,14 @@ func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int)
 }
 
 func Wc_AesCbcEncrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) || sz > len(out) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || sz > len(out) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     if sz == 0 { return 0 }
     return int(C.wc_AesCbcEncrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
                (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
 }
 
 func Wc_AesCbcDecrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) || sz > len(out) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || sz > len(out) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     if sz == 0 { return 0 }
     return int(C.wc_AesCbcDecrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
                (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))

@@ -159,3 +159,24 @@ func TestAesGcmAEAD_DstAppend(t *testing.T) {
 		t.Fatalf("Open: got %q, want %q", decrypted[len(outPrefix):], plaintext)
 	}
 }
+
+func TestAesGcmAEADOpenFailureWipesPlaintext(t *testing.T) {
+	var key [wolfSSL.AES_256_KEY_SIZE]byte
+	key[2] = 0x5a
+	a := NewAesGcmAEAD(key)
+	nonce := make([]byte, a.NonceSize())
+	plaintext := []byte("plaintext that must not linger after a failed Open")
+	ciphertext := a.Seal(nil, nonce, plaintext, nil)
+	ciphertext[len(ciphertext)-1] ^= 0x01
+
+	wiped := recordZeroBytes(t)
+	if _, err := a.Open(nil, nonce, ciphertext, nil); err == nil {
+		t.Fatal("Open accepted a tampered tag")
+	}
+	for _, b := range wiped() {
+		if len(b) == len(plaintext) && allZero(b) {
+			return
+		}
+	}
+	t.Fatal("decrypt output buffer was not wiped after authentication failure")
+}

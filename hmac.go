@@ -45,6 +45,8 @@ package wolfSSL
 //     free(ptr);
 // }
 // #endif
+// int wc_go_PrivateKeyUnlock(void);
+// int wc_go_PrivateKeyLock(void);
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_HKDF_Unlocked(int type, const byte* inKey, word32 inKeySz,
 //                             const byte* salt, word32 saltSz,
@@ -52,9 +54,15 @@ package wolfSSL
 //                             byte* out, word32 outSz)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_HKDF(type, inKey, inKeySz, salt, saltSz, info, infoSz, out, outSz);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_HKDF(type, inKey, inKeySz, salt, saltSz, info, infoSz,
+//                       out, outSz);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 import "C"

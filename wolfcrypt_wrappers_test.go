@@ -1,6 +1,8 @@
 package wolfSSL
 
 import (
+	"bytes"
+	"encoding/hex"
 	"testing"
 )
 
@@ -337,5 +339,67 @@ func TestChaChaPolyRejectsWrongKeyAndIvLength(t *testing.T) {
 	}
 	if ret := Wc_ChaCha20Poly1305_Decrypt(key, longIv, nil, ct, tag, out); ret != BAD_FUNC_ARG {
 		t.Fatalf("decrypt long iv: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}
+
+const testUnlockFailE = -287
+const testLockFailE = -192
+
+func isAllZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestHKDFPropagatesPrivateKeyGateStatus(t *testing.T) {
+	skipWithoutSha256(t)
+	defer forcePrivateKeyGate(false, 0, 0)
+	ikm := bytes.Repeat([]byte{0x0b}, 22)
+	salt := bytes.Repeat([]byte{0x5a}, 32)
+	info := []byte("info")
+	run := func() ([]byte, int) {
+		out := make([]byte, 32)
+		return out, Wc_HKDF(WC_SHA256, ikm, len(ikm), salt, len(salt), info, len(info), out, len(out))
+	}
+	if _, ret := run(); ret == notCompiledE {
+		t.Skip("HKDF not compiled")
+	}
+
+	forcePrivateKeyGate(true, testUnlockFailE, 0)
+	out, ret := run()
+	if ret != testUnlockFailE || !isAllZero(out) || privateKeyGateLockCalls() != 0 {
+		t.Fatalf("unlock failure: ret %d, out %x, lock calls %d", ret, out, privateKeyGateLockCalls())
+	}
+
+	forcePrivateKeyGate(true, 0, testLockFailE)
+	out, ret = run()
+	if ret != testLockFailE || isAllZero(out) || privateKeyGateLockCalls() != 1 {
+		t.Fatalf("lock failure: ret %d, lock calls %d", ret, privateKeyGateLockCalls())
+	}
+}
+
+func TestHKDFKnownAnswer(t *testing.T) {
+	skipWithoutSha256(t)
+	ikm := bytes.Repeat([]byte{0x0b}, 22)
+	// salt is the HMAC key, so it must meet the FIPS 14-byte minimum
+	salt := make([]byte, 32)
+	for i := range salt {
+		salt[i] = byte(i)
+	}
+	info := []byte{0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9}
+	want, _ := hex.DecodeString("01541ab9f2902b89038dab768f1706b15bf8e650095af780520009758f4b690a9ce9416dadcda61c4206")
+	out := make([]byte, len(want))
+	ret := Wc_HKDF(WC_SHA256, ikm, len(ikm), salt, len(salt), info, len(info), out, len(out))
+	if ret == notCompiledE {
+		t.Skip("HKDF not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_HKDF: %d", ret)
+	}
+	if !bytes.Equal(out, want) {
+		t.Fatalf("HKDF output mismatch:\n got %x\nwant %x", out, want)
 	}
 }

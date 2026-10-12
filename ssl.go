@@ -110,6 +110,10 @@ package wolfSSL
 // }
 // #endif
 // #ifndef HAVE_ALPN
+// enum {
+//     WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 2,
+//     WOLFSSL_ALPN_FAILED_ON_MISMATCH = 4
+// };
 // int wolfSSL_UseALPN(WOLFSSL* ssl, char* protocol_name_list,
 //                     unsigned int protocol_name_listSz, unsigned char options) {
 //      (void)ssl; (void)protocol_name_list; (void)protocol_name_listSz;
@@ -336,8 +340,8 @@ const SSL_VERIFY_CLIENT_ONCE = 4
 const WOLFSSL_SNI_HOST_NAME = 0
 
 /* ALPN option constants */
-const WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 1
-const WOLFSSL_ALPN_FAILED_ON_MISMATCH = 2
+const WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = C.WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+const WOLFSSL_ALPN_FAILED_ON_MISMATCH = C.WOLFSSL_ALPN_FAILED_ON_MISMATCH
 
 func WolfSSLv23_client_method() *C.struct_WOLFSSL_METHOD {
     return C.wolfSSLv23_client_method()

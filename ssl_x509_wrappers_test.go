@@ -1,0 +1,165 @@
+//go:build !windows
+// +build !windows
+
+/* ssl_x509_wrappers_test.go
+ *
+ * Copyright (C) 2006-2026 wolfSSL Inc.
+ *
+ * This file is part of wolfSSL.
+ *
+ * wolfSSL is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfSSL is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package wolfSSL
+
+import (
+    "os"
+    "syscall"
+    "testing"
+    "time"
+)
+
+const testCertDir = "examples/certs/"
+const testNotCompiledIn = -174
+
+type tlsTestPair struct {
+    srvCtx *WOLFSSL_CTX
+    cliCtx *WOLFSSL_CTX
+    srv    *WOLFSSL
+    cli    *WOLFSSL
+    fds    [2]int
+}
+
+func readTestFile(t *testing.T, name string) []byte {
+    t.Helper()
+    b, err := os.ReadFile(testCertDir + name)
+    if err != nil {
+        t.Fatalf("read %s: %v", name, err)
+    }
+    return b
+}
+
+func newTLSTestPair(t *testing.T) *tlsTestPair {
+    t.Helper()
+    WolfSSL_Init()
+    p := &tlsTestPair{}
+    fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+    if err != nil {
+        t.Fatalf("socketpair: %v", err)
+    }
+    p.fds = fds
+    t.Cleanup(p.free)
+
+    p.srvCtx = WolfSSL_CTX_new_v23_server()
+    p.cliCtx = WolfSSL_CTX_new_v23_client()
+    if p.srvCtx == nil || p.cliCtx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    chain := readTestFile(t, "server-cert.pem")
+    if WolfSSL_CTX_use_certificate_chain_buffer_format(p.srvCtx, chain,
+        len(chain), SSL_FILETYPE_PEM) != WOLFSSL_SUCCESS {
+        t.Fatal("load server chain failed")
+    }
+    key := readTestFile(t, "server-key.pem")
+    if WolfSSL_CTX_use_PrivateKey_buffer(p.srvCtx, key, len(key),
+        SSL_FILETYPE_PEM) != WOLFSSL_SUCCESS {
+        t.Fatal("load server key failed")
+    }
+    WolfSSL_CTX_set_verify(p.cliCtx, SSL_VERIFY_NONE)
+
+    p.srv = WolfSSL_new(p.srvCtx)
+    p.cli = WolfSSL_new(p.cliCtx)
+    if p.srv == nil || p.cli == nil {
+        t.Fatal("WolfSSL_new failed")
+    }
+    WolfSSL_set_fd(p.srv, fds[0])
+    WolfSSL_set_fd(p.cli, fds[1])
+    return p
+}
+
+func (p *tlsTestPair) free() {
+    if p.srv != nil { WolfSSL_free(p.srv) }
+    if p.cli != nil { WolfSSL_free(p.cli) }
+    if p.srvCtx != nil { WolfSSL_CTX_free(p.srvCtx) }
+    if p.cliCtx != nil { WolfSSL_CTX_free(p.cliCtx) }
+    syscall.Close(p.fds[0])
+    syscall.Close(p.fds[1])
+}
+
+func (p *tlsTestPair) handshake(t *testing.T) (int, int) {
+    t.Helper()
+    srvRet := make(chan int, 1)
+    go func() {
+        ret := WolfSSL_accept(p.srv)
+        if ret != WOLFSSL_SUCCESS {
+            syscall.Shutdown(p.fds[0], syscall.SHUT_RDWR)
+        }
+        srvRet <- ret
+    }()
+    watchdog := time.AfterFunc(20*time.Second, func() {
+        syscall.Shutdown(p.fds[0], syscall.SHUT_RDWR)
+        syscall.Shutdown(p.fds[1], syscall.SHUT_RDWR)
+    })
+    defer watchdog.Stop()
+    cliRet := WolfSSL_connect(p.cli)
+    if cliRet != WOLFSSL_SUCCESS {
+        syscall.Shutdown(p.fds[1], syscall.SHUT_RDWR)
+    }
+    return <-srvRet, cliRet
+}
+
+func requireALPN(t *testing.T) {
+    t.Helper()
+    WolfSSL_Init()
+    ctx := WolfSSL_CTX_new_v23_client()
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    ssl := WolfSSL_new(ctx)
+    if ssl == nil {
+        t.Fatal("WolfSSL_new failed")
+    }
+    defer WolfSSL_free(ssl)
+    if WolfSSL_UseALPN(ssl, "h2", WOLFSSL_ALPN_CONTINUE_ON_MISMATCH) == testNotCompiledIn {
+        t.Skip("wolfSSL built without ALPN")
+    }
+}
+
+func TestALPNFailedOnMismatchAbortsHandshake(t *testing.T) {
+    requireALPN(t)
+    p := newTLSTestPair(t)
+    if WolfSSL_UseALPN(p.srv, "http/1.1", WOLFSSL_ALPN_FAILED_ON_MISMATCH) != WOLFSSL_SUCCESS ||
+        WolfSSL_UseALPN(p.cli, "h2", WOLFSSL_ALPN_FAILED_ON_MISMATCH) != WOLFSSL_SUCCESS {
+        t.Fatal("UseALPN failed")
+    }
+    srvRet, cliRet := p.handshake(t)
+    if srvRet == WOLFSSL_SUCCESS || cliRet == WOLFSSL_SUCCESS {
+        t.Fatalf("handshake with no common ALPN protocol succeeded (srv=%d cli=%d)",
+            srvRet, cliRet)
+    }
+}
+
+func TestALPNContinueOnMismatchCompletesHandshake(t *testing.T) {
+    requireALPN(t)
+    p := newTLSTestPair(t)
+    if WolfSSL_UseALPN(p.srv, "http/1.1", WOLFSSL_ALPN_CONTINUE_ON_MISMATCH) != WOLFSSL_SUCCESS ||
+        WolfSSL_UseALPN(p.cli, "h2", WOLFSSL_ALPN_CONTINUE_ON_MISMATCH) != WOLFSSL_SUCCESS {
+        t.Fatal("UseALPN failed")
+    }
+    srvRet, cliRet := p.handshake(t)
+    if srvRet != WOLFSSL_SUCCESS || cliRet != WOLFSSL_SUCCESS {
+        t.Fatalf("handshake failed (srv=%d cli=%d)", srvRet, cliRet)
+    }
+}

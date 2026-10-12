@@ -966,3 +966,57 @@ func TestEccVerifyHashClearsResultOnError(t *testing.T) {
 		t.Fatalf("failed verify left res = %d", res)
 	}
 }
+
+func TestAesGcmAppendedTagEncryptFailureKeepsInPlacePlaintext(t *testing.T) {
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_AesInit: %d", ret)
+	}
+	defer Wc_AesFree(aes)
+	key := make([]byte, AES_128_KEY_SIZE)
+	if ret := Wc_AesGcmSetKey(aes, key, len(key)); ret == notCompiledE {
+		t.Skip("AES-GCM not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesGcmSetKey: %d", ret)
+	}
+	plain := []byte("in-place plaintext")
+	buf := make([]byte, len(plain)+AES_BLOCK_SIZE)
+	copy(buf, plain)
+	if _, ret := Wc_AesGcm_Appended_Tag_Encrypt(aes, buf, buf[:len(plain)], nil, nil); ret == 0 {
+		t.Fatalf("encrypt with missing iv succeeded")
+	}
+	if !bytes.Equal(buf[:len(plain)], plain) {
+		t.Fatalf("failed encrypt modified in-place plaintext: %x", buf[:len(plain)])
+	}
+}
+
+func TestAesGcmAppendedTagEncryptFailureReturnsNil(t *testing.T) {
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_AesInit: %d", ret)
+	}
+	defer Wc_AesFree(aes)
+	key := make([]byte, AES_128_KEY_SIZE)
+	if ret := Wc_AesGcmSetKey(aes, key, len(key)); ret == notCompiledE {
+		t.Skip("AES-GCM not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesGcmSetKey: %d", ret)
+	}
+	plain := []byte("plaintext")
+	out := make([]byte, len(plain)+AES_BLOCK_SIZE)
+	got, ret := Wc_AesGcm_Appended_Tag_Encrypt(aes, out, plain, nil, nil)
+	if ret == 0 {
+		t.Fatalf("encrypt with missing iv succeeded")
+	}
+	if got != nil {
+		t.Fatalf("failed encrypt returned output %x", got)
+	}
+}

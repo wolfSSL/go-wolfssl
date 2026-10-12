@@ -272,6 +272,9 @@ func Wc_AesGcm_Appended_Tag_Encrypt(aes *C.struct_Aes, outCipher, inPlain, inIv,
     }
 
     ret := Wc_AesGcmEncrypt(aes, longOutCipher[:(len(longOutCipher)-AES_BLOCK_SIZE)], inPlain, inIv, outAuthTag[:], inAAD)
+    if ret != 0 {
+        return nil, ret
+    }
     copy(longOutCipher[(len(longOutCipher)-AES_BLOCK_SIZE):], outAuthTag[:])
     return longOutCipher, ret
 }

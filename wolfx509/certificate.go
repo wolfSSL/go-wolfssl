@@ -321,8 +321,8 @@ func parseCertificates(der []byte, parse func([]byte) (*Certificate, error)) ([]
 
 // derSequenceLen returns the total length (header + content) of the
 // top-level ASN.1 SEQUENCE that begins at b[0]. Errors if the buffer
-// doesn't start with a SEQUENCE tag (0x30) or is too short to contain
-// the length field.
+// doesn't start with a SEQUENCE tag (0x30), is too short to contain
+// the length field, or is shorter than the encoded length.
 func derSequenceLen(b []byte) (int, error) {
 	if len(b) < 2 {
 		return 0, fmt.Errorf("%w: too short for ASN.1 header", ErrInvalidCert)
@@ -332,6 +332,9 @@ func derSequenceLen(b []byte) (int, error) {
 	}
 	first := b[1]
 	if first&0x80 == 0 {
+		if 2+int(first) > len(b) {
+			return 0, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, 2+int(first), len(b))
+		}
 		return 2 + int(first), nil
 	}
 	nlen := int(first & 0x7f)
@@ -341,11 +344,14 @@ func derSequenceLen(b []byte) (int, error) {
 	if len(b) < 2+nlen {
 		return 0, fmt.Errorf("%w: truncated length field", ErrInvalidCert)
 	}
-	n := 0
+	var n uint64
 	for i := 0; i < nlen; i++ {
-		n = (n << 8) | int(b[2+i])
+		n = (n << 8) | uint64(b[2+i])
 	}
-	return 2 + nlen + n, nil
+	if total := uint64(2+nlen) + n; total > uint64(len(b)) {
+		return 0, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, total, len(b))
+	}
+	return 2 + nlen + int(n), nil
 }
 
 // PublicECCRawXY extracts the leaf certificate's ECDSA P-256 public point

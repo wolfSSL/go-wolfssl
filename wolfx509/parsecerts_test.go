@@ -273,3 +273,19 @@ func TestParseCertificatesFreesOnError(t *testing.T) {
 		}
 	}
 }
+
+func TestDerSequenceLenRejectsOverlongLength(t *testing.T) {
+	for _, b := range [][]byte{
+		{0x30, 0x84, 0xff, 0xff, 0xff, 0xff},
+		{0x30, 0x84, 0x80, 0x00, 0x00, 0x00, 0x00},
+		{0x30, 0x81, 0x05, 0x00},
+		{0x30, 0x05, 0x00},
+	} {
+		if n, err := derSequenceLen(b); err == nil {
+			t.Errorf("derSequenceLen(%x) = %d, want error", b, n)
+		}
+		if _, err := ParseCertificates(b); err == nil {
+			t.Errorf("ParseCertificates(%x) succeeded", b)
+		}
+	}
+}

@@ -238,3 +238,38 @@ func TestCertificateFreeReleasesOwnedPublicKey(t *testing.T) {
 		t.Error("CreateCertificateRequest accepted a freed key")
 	}
 }
+
+func TestParseCertificatesFreesOnError(t *testing.T) {
+	good := mintCert(t, "first.example")
+	var parsed []*Certificate
+	var keys []*handles.EccKey
+	record := func(der []byte) (*Certificate, error) {
+		c, err := ParseCertificate(der)
+		if err == nil {
+			parsed = append(parsed, c)
+			keys = append(keys, c.PublicKey.(*handles.EccKey))
+		}
+		return c, err
+	}
+
+	bad := []byte{0x30, 0x03, 0x02, 0x01, 0x01}
+	for name, input := range map[string][]byte{
+		"unparseable second cert": append(append([]byte(nil), good...), bad...),
+		"truncated second cert":   append(append([]byte(nil), good...), 0x30, 0x10, 0x00),
+		"non-SEQUENCE trailer":    append(append([]byte(nil), good...), 0x04, 0x00),
+	} {
+		parsed, keys = nil, nil
+		if _, err := parseCertificates(input, record); err == nil {
+			t.Fatalf("%s: ParseCertificates succeeded", name)
+		}
+		if len(parsed) != 1 {
+			t.Fatalf("%s: parsed %d certificates before the error, want 1", name, len(parsed))
+		}
+		if _, err := parsed[0].Verify(VerifyOptions{}); err != ErrInvalidCert {
+			t.Errorf("%s: first certificate was not freed (Verify err = %v)", name, err)
+		}
+		if keys[0].IsLive() {
+			t.Errorf("%s: first certificate's PublicKey was not freed", name)
+		}
+	}
+}

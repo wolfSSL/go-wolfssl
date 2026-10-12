@@ -285,22 +285,33 @@ func (c *Certificate) VerifyHostname(host string) error {
 // walks the input slicing successive SEQUENCEs and delegating each to
 // ParseCertificate.
 func ParseCertificates(der []byte) ([]*Certificate, error) {
+	return parseCertificates(der, ParseCertificate)
+}
+
+// parseCertificates takes the per-certificate parser so tests can observe it.
+func parseCertificates(der []byte, parse func([]byte) (*Certificate, error)) ([]*Certificate, error) {
 	if len(der) == 0 {
 		return nil, ErrInvalidCert
 	}
 	var out []*Certificate
+	fail := func(err error) ([]*Certificate, error) {
+		for _, c := range out {
+			c.Free()
+		}
+		return nil, err
+	}
 	rest := der
 	for len(rest) > 0 {
 		n, err := derSequenceLen(rest)
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 		if n > len(rest) {
-			return nil, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, n, len(rest))
+			return fail(fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, n, len(rest)))
 		}
-		cert, err := ParseCertificate(rest[:n])
+		cert, err := parse(rest[:n])
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 		out = append(out, cert)
 		rest = rest[n:]

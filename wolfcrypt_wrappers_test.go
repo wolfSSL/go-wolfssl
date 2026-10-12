@@ -264,3 +264,48 @@ func TestBlake2sHmacReportsErrors(t *testing.T) {
 		t.Fatalf("short out: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func sha256Available() bool {
+	out := make([]byte, WC_SHA256_DIGEST_SIZE)
+	return Wc_Sha256Hash([]byte("x"), 1, out) != notCompiledE
+}
+
+func skipWithoutSha256(t *testing.T) {
+	t.Helper()
+	if !sha256Available() {
+		t.Skip("SHA-256 not compiled")
+	}
+}
+
+func TestHmacFinalShortOutput(t *testing.T) {
+	skipWithoutSha256(t)
+	hmac := Wc_HmacAllocAligned()
+	if hmac == nil {
+		t.Fatal("Wc_HmacAllocAligned failed")
+	}
+	defer Wc_HmacFreeAllocAligned(hmac)
+	if ret := Wc_HmacInit(hmac, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_HmacInit: %d", ret)
+	}
+	defer Wc_HmacFree(hmac)
+	key := []byte("hmac key long enough for fips mode")
+	if ret := Wc_HmacSetKey(hmac, WC_SHA256, key, len(key)); ret != 0 {
+		t.Fatalf("Wc_HmacSetKey: %d", ret)
+	}
+	buf := make([]byte, WC_SHA256_DIGEST_SIZE)
+	for i := range buf {
+		buf[i] = 0xA5
+	}
+	short := buf[:WC_SHA256_DIGEST_SIZE/2]
+	if ret := Wc_HmacFinal(hmac, short); ret != BAD_FUNC_ARG {
+		t.Fatalf("short out: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	for i := len(short); i < len(buf); i++ {
+		if buf[i] != 0xA5 {
+			t.Fatalf("wrote past end of output at offset %d", i)
+		}
+	}
+	if ret := Wc_HmacFinal(hmac, buf); ret != 0 {
+		t.Fatalf("full out: %d", ret)
+	}
+}

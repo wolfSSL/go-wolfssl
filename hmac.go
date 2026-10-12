@@ -105,7 +105,9 @@ func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
 }
 
 func Wc_HmacFinal(hmac *C.struct_Hmac, out []byte) int {
-    if len(out) == 0 { return BAD_FUNC_ARG }
+    if hmac == nil || len(out) == 0 { return BAD_FUNC_ARG }
+    digestSz := int(C.wc_HmacSizeByType(C.int(hmac.macType)))
+    if digestSz <= 0 || len(out) < digestSz { return BAD_FUNC_ARG }
     return int(C.wc_HmacFinal(hmac, (*C.uchar)(unsafe.Pointer(&out[0]))))
 }
 

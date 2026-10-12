@@ -31,9 +31,9 @@ import (
 	"github.com/wolfssl/go-wolfssl/handles"
 )
 
-// ErrUnsupportedCreateMode indicates the current wolfx509 build doesn't
-// yet handle the requested CreateCertificate shape (CA-signed, non-ECC
-// key, etc.).
+// ErrUnsupportedCreateMode is returned by CreateCertificateRequest when the
+// template asks for a signature algorithm this build cannot produce, and by
+// CreateCertificate when wolfSSL cannot encode a requested key usage.
 var ErrUnsupportedCreateMode = errors.New("wolfx509: unsupported CreateCertificate mode")
 
 // KeyHandle is a wolfCrypt key + RNG suitable for cert/CSR signing or for

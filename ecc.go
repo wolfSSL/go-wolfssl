@@ -181,6 +181,7 @@ package wolfSSL
 // }
 import "C"
 import (
+    "strings"
     "unsafe"
 )
 
@@ -398,7 +399,7 @@ func Wc_GetPkcs8TraditionalOffset(input []byte, idx *int) int {
 }
 
 func Wc_KeyPemToDer(pem []byte, out []byte, pass string) int {
-    if len(pem) == 0 {
+    if len(pem) == 0 || strings.IndexByte(pass, 0) >= 0 {
         return BAD_FUNC_ARG
     }
     cPass := C.CString(pass)

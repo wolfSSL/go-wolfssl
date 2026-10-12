@@ -942,3 +942,11 @@ func TestOneShotHashesRejectOversizedInput(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyPemToDerRejectsPassphraseWithNul(t *testing.T) {
+	pem, _ := testEccPem(t)
+	out := make([]byte, 512)
+	if ret := Wc_KeyPemToDer(pem, out, "pass\x00word"); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

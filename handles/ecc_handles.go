@@ -21,6 +21,7 @@
 package handles
 
 import (
+	"bytes"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -60,6 +61,7 @@ type EccKey struct {
 	init   bool // wc_ecc_init has run
 	hasRng bool // wc_InitRng has run (private-key handles only)
 	live   bool // additionally, key material is populated
+	alg    Algorithm
 }
 
 // GenerateP256Key returns a fresh P-256 (secp256r1) ECC key pair generated
@@ -74,7 +76,11 @@ func GenerateP256Key() (*EccKey, error) {
 		k.Free()
 		return nil, fmt.Errorf("wolfCrypt: wc_ecc_make_key: %d", ret)
 	}
-	k.live = true
+	k.MarkLive()
+	if k.Algorithm() != AlgECDSAP256 {
+		k.Free()
+		return nil, errors.New("handles: generated key is not P-256")
+	}
 	return k, nil
 }
 
@@ -114,7 +120,42 @@ func NewEmptyEccPubKey() (*EccKey, error) {
 // MarkLive flags the key as fully populated. Higher-level parse helpers call
 // this once they have successfully filled the underlying ecc_key from a DER
 // or PEM blob. After MarkLive the key is usable for signing/verification.
-func (k *EccKey) MarkLive() { k.live = true }
+// MarkLive also records the key's curve for Algorithm.
+func (k *EccKey) MarkLive() {
+	k.alg, _ = eccKeyAlgorithm(&k.raw)
+	k.live = true
+}
+
+// p256SPKIPrefix is the DER SubjectPublicKeyInfo header for an uncompressed
+// prime256v1 (P-256) public key.
+var p256SPKIPrefix = []byte{
+	0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02,
+	0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03,
+	0x42, 0x00, 0x04,
+}
+
+// eccPrivateOnlyE is wolfCrypt's ECC_PRIVATEONLY_E: the key has no public point.
+const eccPrivateOnlyE = -246
+
+// eccKeyAlgorithm returns the curve class of key, or AlgUnknown and the
+// negative wolfCrypt error if its public key cannot be exported.
+func eccKeyAlgorithm(key *wolfSSL.Ecc_key) (Algorithm, int) {
+	spki := make([]byte, 160)
+	n := wolfSSL.Wc_EccPublicKeyToDer(key, spki, 1)
+	if n == eccPrivateOnlyE {
+		if ret := wolfSSL.Wc_ecc_make_pub_in_priv(key); ret != 0 {
+			return AlgUnknown, ret
+		}
+		n = wolfSSL.Wc_EccPublicKeyToDer(key, spki, 1)
+	}
+	if n < 0 {
+		return AlgUnknown, n
+	}
+	if n == len(p256SPKIPrefix)+64 && bytes.Equal(spki[:len(p256SPKIPrefix)], p256SPKIPrefix) {
+		return AlgECDSAP256, 0
+	}
+	return AlgUnknown, 0
+}
 
 // IsLive reports whether the key has been generated or successfully parsed
 // (i.e. usable for signing/verification operations) and not yet freed.
@@ -147,7 +188,9 @@ func (k *EccKey) Raw() *wolfSSL.Ecc_key { return &k.raw }
 // operations that take an RNG argument.
 func (k *EccKey) Rng() *wolfSSL.WC_RNG { return &k.rng }
 
-func (k *EccKey) Algorithm() Algorithm    { return AlgECDSAP256 }
+// Algorithm returns AlgECDSAP256 for a live P-256 key and AlgUnknown for
+// any other curve or for a key that has not been marked live.
+func (k *EccKey) Algorithm() Algorithm    { return k.alg }
 func (k *EccKey) CKeyPtr() unsafe.Pointer { return unsafe.Pointer(&k.raw) }
 
 func (k *EccKey) CRngPtr() unsafe.Pointer {
@@ -214,8 +257,12 @@ func MarshalPKCS8PEM(k *EccKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
+// errNotP256 reports a well-formed EC private key on a curve other than P-256.
+var errNotP256 = errors.New("handles: EC private key is not P-256")
+
 // ParseECPrivateKeyDER parses a SEC1 EC private key DER blob (the body of
-// an "EC PRIVATE KEY" PEM) into a fresh EccKey.
+// an "EC PRIVATE KEY" PEM) into a fresh EccKey. Only P-256 keys are
+// accepted.
 func ParseECPrivateKeyDER(der []byte) (*EccKey, error) {
 	if len(der) == 0 {
 		return nil, errors.New("handles: empty EC private key DER")
@@ -228,6 +275,15 @@ func ParseECPrivateKeyDER(der []byte) (*EccKey, error) {
 	if ret := wolfSSL.Wc_EccPrivateKeyDecode(der, &idx, k.Raw(), len(der)); ret != 0 {
 		k.Free()
 		return nil, fmt.Errorf("wolfCrypt: wc_EccPrivateKeyDecode: %d", ret)
+	}
+	alg, ret := eccKeyAlgorithm(k.Raw())
+	if ret < 0 {
+		k.Free()
+		return nil, fmt.Errorf("wolfCrypt: wc_EccPublicKeyToDer: %d", ret)
+	}
+	if alg != AlgECDSAP256 {
+		k.Free()
+		return nil, errNotP256
 	}
 	k.MarkLive()
 	return k, nil
@@ -260,8 +316,9 @@ func ParseECPrivateKeyPEM(p []byte) (*EccKey, error) {
 		return nil, fmt.Errorf("wolfCrypt: wc_KeyPemToDer: %d", n)
 	}
 	der = der[:n]
-	if k, err := ParseECPrivateKeyDER(der); err == nil {
-		return k, nil
+	k, err := ParseECPrivateKeyDER(der)
+	if err == nil || err == errNotP256 {
+		return k, err
 	}
 	return ParsePKCS8ECPrivateKeyDER(der)
 }

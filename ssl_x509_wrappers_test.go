@@ -304,3 +304,24 @@ func TestCheckDomainNameRejectsEmbeddedNUL(t *testing.T) {
         t.Fatalf("WolfSSL_check_domain_name = %d", ret)
     }
 }
+
+func TestFileLoadersRejectEmbeddedNUL(t *testing.T) {
+    WolfSSL_Init()
+    ctx := WolfSSL_CTX_new_v23_server()
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    if ret := WolfSSL_CTX_load_verify_locations(ctx, testCertDir+"ca-cert.pem\x00.bak", nil); ret != BAD_FUNC_ARG {
+        t.Errorf("load_verify_locations file with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_CTX_load_verify_locations(ctx, "", []byte(testCertDir+"\x00x")); ret != BAD_FUNC_ARG {
+        t.Errorf("load_verify_locations path with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_CTX_use_certificate_file(ctx, testCertDir+"server-cert.pem\x00.bak", SSL_FILETYPE_PEM); ret != BAD_FUNC_ARG {
+        t.Errorf("use_certificate_file with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_CTX_use_PrivateKey_file(ctx, testCertDir+"server-key.pem\x00.bak", SSL_FILETYPE_PEM); ret != BAD_FUNC_ARG {
+        t.Errorf("use_PrivateKey_file with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+}

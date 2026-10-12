@@ -256,6 +256,9 @@ func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) i
 
 func WolfSSL_CTX_load_verify_locations(ctx *C.struct_WOLFSSL_CTX, cert string,
                                        path []byte) int {
+    if wrapperStringHasNUL(cert) || wrapperStringHasNUL(string(path)) {
+        return BAD_FUNC_ARG
+    }
     var cert_file, cert_path *C.char
     if cert != "" {
         cert_file = C.CString(cert)
@@ -270,6 +273,7 @@ func WolfSSL_CTX_load_verify_locations(ctx *C.struct_WOLFSSL_CTX, cert string,
 
 func WolfSSL_CTX_use_certificate_file(ctx *C.struct_WOLFSSL_CTX, cert string,
                                       format int) int {
+    if wrapperStringHasNUL(cert) { return BAD_FUNC_ARG }
     cert_file := C.CString(cert)
     defer C.free(unsafe.Pointer(cert_file))
     return int(C.wolfSSL_CTX_use_certificate_file(ctx, cert_file, C.int(format)))
@@ -277,6 +281,7 @@ func WolfSSL_CTX_use_certificate_file(ctx *C.struct_WOLFSSL_CTX, cert string,
 
 func WolfSSL_CTX_use_PrivateKey_file(ctx *C.struct_WOLFSSL_CTX, key string,
                                      format int) int {
+    if wrapperStringHasNUL(key) { return BAD_FUNC_ARG }
     key_file := C.CString(key)
     defer C.free(unsafe.Pointer(key_file))
     return int(C.wolfSSL_CTX_use_PrivateKey_file(ctx, key_file, C.int(format)))

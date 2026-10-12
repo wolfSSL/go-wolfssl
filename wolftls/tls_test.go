@@ -1381,6 +1381,10 @@ func TestConcurrentReadWrite(t *testing.T) {
 				}
 				total += n
 			}
+			if want := bytes.Repeat([]byte{byte(i)}, msgSize); !bytes.Equal(buf, want) {
+				errs <- fmt.Errorf("server read %d: payload does not match message %d", i, i)
+				return
+			}
 		}
 		errs <- nil
 	}()
@@ -1411,6 +1415,10 @@ func TestConcurrentReadWrite(t *testing.T) {
 					return
 				}
 				total += n
+			}
+			if want := bytes.Repeat([]byte{byte(i + 128)}, msgSize); !bytes.Equal(buf, want) {
+				errs <- fmt.Errorf("client read %d: payload does not match message %d", i, i)
+				return
 			}
 		}
 		errs <- nil

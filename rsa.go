@@ -204,7 +204,19 @@ func Wc_EncodeSignature(out []byte, digest []byte, hashOID int) int {
         C.int(hashOID)))
 }
 
+func rsaExponentFitsLong(e int64, longBits uint) bool {
+    if longBits >= 64 {
+        return true
+    }
+    limit := int64(1) << (longBits - 1)
+    return e >= -limit && e < limit
+}
+
 func Wc_MakeRsaKey(key *C.struct_RsaKey, size int, e int64, rng *C.struct_WC_RNG) int {
+    if size <= 0 || int64(C.int(size)) != int64(size) ||
+       !rsaExponentFitsLong(e, uint(unsafe.Sizeof(C.long(0)))*8) {
+        return BAD_FUNC_ARG
+    }
     return int(C.wc_MakeRsaKey(key, C.int(size), C.long(e), rng))
 }
 

@@ -3,6 +3,7 @@ package wolfSSL
 import (
 	"bytes"
 	"encoding/hex"
+	"strconv"
 	"testing"
 )
 
@@ -482,5 +483,47 @@ func TestPBKDF2KnownAnswer(t *testing.T) {
 	}
 	if !bytes.Equal(out, want) {
 		t.Fatalf("PBKDF2 output mismatch:\n got %x\nwant %x", out, want)
+	}
+}
+
+func TestRsaExponentFitsLong(t *testing.T) {
+	cases := []struct {
+		e    int64
+		bits uint
+		want bool
+	}{
+		{65537, 32, true},
+		{1<<31 - 1, 32, true},
+		{1 << 31, 32, false},
+		{-(1 << 31), 32, true},
+		{-(1 << 31) - 1, 32, false},
+		{1 << 40, 32, false},
+		{1 << 40, 64, true},
+		{-1 << 63, 64, true},
+	}
+	for _, c := range cases {
+		if got := rsaExponentFitsLong(c.e, c.bits); got != c.want {
+			t.Errorf("rsaExponentFitsLong(%d, %d) = %v, want %v", c.e, c.bits, got, c.want)
+		}
+	}
+}
+
+func TestMakeRsaKeyRejectsSizeOutOfIntRange(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("needs 64-bit int")
+	}
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	key := new(RsaKey)
+	if ret := Wc_InitRsaKey(key); ret == notCompiledE {
+		t.Skip("RSA not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_InitRsaKey: %d", ret)
+	}
+	defer Wc_FreeRsaKey(key)
+	wide := uint64(1)<<32 + 2048
+	size := int(wide)
+	if ret := Wc_MakeRsaKey(key, size, 65537, rng); ret != BAD_FUNC_ARG {
+		t.Fatalf("size %d: got %d, want %d", size, ret, BAD_FUNC_ARG)
 	}
 }

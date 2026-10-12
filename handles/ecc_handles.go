@@ -348,6 +348,7 @@ func MarshalSEC1PEM(k *EccKey) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(der[:cap(der)])
 	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
 }
 
@@ -358,6 +359,7 @@ func MarshalPKCS8PEM(k *EccKey) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(der[:cap(der)])
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 

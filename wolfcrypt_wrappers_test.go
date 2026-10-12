@@ -403,3 +403,84 @@ func TestHKDFKnownAnswer(t *testing.T) {
 		t.Fatalf("HKDF output mismatch:\n got %x\nwant %x", out, want)
 	}
 }
+
+func checkPrivateKeyGate(t *testing.T, name string, run func() ([]byte, int)) {
+	t.Helper()
+	defer forcePrivateKeyGate(false, 0, 0)
+	forcePrivateKeyGate(true, testUnlockFailE, 0)
+	out, ret := run()
+	if ret != testUnlockFailE || !isAllZero(out) || privateKeyGateLockCalls() != 0 {
+		t.Errorf("%s unlock failure: ret %d, out %x, lock calls %d", name, ret, out, privateKeyGateLockCalls())
+	}
+	forcePrivateKeyGate(true, 0, testLockFailE)
+	out, ret = run()
+	if ret != testLockFailE || isAllZero(out) || privateKeyGateLockCalls() != 1 {
+		t.Errorf("%s lock failure: ret %d, lock calls %d", name, ret, privateKeyGateLockCalls())
+	}
+}
+
+func TestPBKDF2AndEccPropagatePrivateKeyGateStatus(t *testing.T) {
+	pwd := []byte("passwordPASSWORDpassword")
+	salt := []byte("saltSALTsaltSALTsaltSALTsaltSALTsalt")
+	pbkdf2 := func() ([]byte, int) {
+		out := make([]byte, 32)
+		return out, Wc_PBKDF2(out, pwd, len(pwd), salt, len(salt), 1000, len(out), WC_SHA256)
+	}
+	if _, ret := pbkdf2(); ret != notCompiledE && sha256Available() {
+		checkPrivateKeyGate(t, "PBKDF2", pbkdf2)
+	}
+
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	keys := make([]*Ecc_key, 2)
+	for i := range keys {
+		keys[i] = new(Ecc_key)
+		if ret := Wc_ecc_init(keys[i]); ret == notCompiledE {
+			t.Skip("ECC not compiled")
+		} else if ret != 0 {
+			t.Fatalf("Wc_ecc_init: %d", ret)
+		}
+		defer Wc_ecc_free(keys[i])
+		if ret := Wc_ecc_make_key(rng, 32, keys[i]); ret == notCompiledE {
+			t.Skip("ECC not compiled")
+		} else if ret != 0 {
+			t.Fatalf("Wc_ecc_make_key: %d", ret)
+		}
+	}
+	checkPrivateKeyGate(t, "export_private_only", func() ([]byte, int) {
+		out := make([]byte, 32)
+		n := len(out)
+		return out, Wc_ecc_export_private_only(keys[0], out, &n)
+	})
+	checkPrivateKeyGate(t, "export_x963_ex", func() ([]byte, int) {
+		out := make([]byte, 65)
+		n := len(out)
+		return out, Wc_ecc_export_x963_ex(keys[0], out, &n, 0)
+	})
+	if ret := Wc_ecc_set_rng(keys[0], rng); ret != 0 {
+		t.Fatalf("Wc_ecc_set_rng: %d", ret)
+	}
+	checkPrivateKeyGate(t, "shared_secret", func() ([]byte, int) {
+		out := make([]byte, 32)
+		n := len(out)
+		return out, Wc_ecc_shared_secret(keys[0], keys[1], out, &n)
+	})
+}
+
+func TestPBKDF2KnownAnswer(t *testing.T) {
+	skipWithoutSha256(t)
+	pwd := []byte("passwordPASSWORDpassword")
+	salt := []byte("saltSALTsaltSALTsaltSALTsaltSALTsalt")
+	want, _ := hex.DecodeString("348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9")
+	out := make([]byte, len(want))
+	ret := Wc_PBKDF2(out, pwd, len(pwd), salt, len(salt), 4096, len(out), WC_SHA256)
+	if ret == notCompiledE {
+		t.Skip("PBKDF2 not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_PBKDF2: %d", ret)
+	}
+	if !bytes.Equal(out, want) {
+		t.Fatalf("PBKDF2 output mismatch:\n got %x\nwant %x", out, want)
+	}
+}

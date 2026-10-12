@@ -116,15 +116,23 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// int wc_go_PrivateKeyUnlock(void);
+// int wc_go_PrivateKeyLock(void);
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_PBKDF2_Unlocked(byte* output, const byte* passwd, int pLen,
 //                               const byte* salt, int sLen, int iterations,
 //                               int kLen, int typeH)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_PBKDF2(output, passwd, pLen, salt, sLen, iterations, kLen, typeH);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_PBKDF2(output, passwd, pLen, salt, sLen, iterations, kLen,
+//                         typeH);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 import "C"

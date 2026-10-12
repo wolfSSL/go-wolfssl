@@ -133,23 +133,35 @@ package wolfSSL
 //     (void)key; return -174;
 // }
 // #endif
+// int wc_go_PrivateKeyUnlock(void);
+// int wc_go_PrivateKeyLock(void);
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_ecc_export_private_only_Unlocked(ecc_key* key, byte* out,
 //                                                word32* outLen)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_ecc_export_private_only(key, out, outLen);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_ecc_export_private_only(key, out, outLen);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 // static int wc_ecc_export_x963_ex_Unlocked(ecc_key* key, byte* out,
 //                                           word32* outLen, int compressed)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_ecc_export_x963_ex(key, out, outLen, compressed);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_ecc_export_x963_ex(key, out, outLen, compressed);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 // static int wc_ecc_shared_secret_Unlocked(ecc_key* private_key,
@@ -157,9 +169,14 @@ package wolfSSL
 //                                          byte* out, word32* outLen)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_ecc_shared_secret(private_key, public_key, out, outLen);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_ecc_shared_secret(private_key, public_key, out, outLen);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 import "C"

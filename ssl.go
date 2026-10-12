@@ -413,6 +413,7 @@ func WolfSSL_CTX_UseSNI(ctx *C.struct_WOLFSSL_CTX, sniType int, data []byte, siz
 }
 
 func WolfSSL_check_domain_name(ssl *C.struct_WOLFSSL, dn string) int {
+    if wrapperStringHasNUL(dn) { return BAD_FUNC_ARG }
     cDN := C.CString(dn)
     defer C.free(unsafe.Pointer(cDN))
     return int(C.wolfSSL_check_domain_name(ssl, cDN))

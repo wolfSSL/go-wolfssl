@@ -20,6 +20,12 @@
 
 package wolfSSL
 
+import "strings"
+
+func wrapperStringHasNUL(s string) bool {
+    return strings.IndexByte(s, 0) >= 0
+}
+
 func wrapperCollectChainDER(count int, entry func(int) []byte) [][]byte {
     var certs [][]byte
     for i := 0; i < count; i++ {

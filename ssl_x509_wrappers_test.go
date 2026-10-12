@@ -294,3 +294,13 @@ func TestUseSNIRejectsOversizedName(t *testing.T) {
         t.Fatalf("WolfSSL_CTX_UseSNI with %d-byte name = %d, want BAD_FUNC_ARG", len(name), ret)
     }
 }
+
+func TestCheckDomainNameRejectsEmbeddedNUL(t *testing.T) {
+    p := newTLSTestPair(t)
+    if ret := WolfSSL_check_domain_name(p.cli, "example.com\x00.attacker.test"); ret != BAD_FUNC_ARG {
+        t.Fatalf("WolfSSL_check_domain_name with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_check_domain_name(p.cli, "example.com"); ret != WOLFSSL_SUCCESS {
+        t.Fatalf("WolfSSL_check_domain_name = %d", ret)
+    }
+}

@@ -229,3 +229,38 @@ func TestCurve25519PrivateExportImportRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestBlake2sHmacDeprecatedWrapperMatchesEx(t *testing.T) {
+	want := make([]byte, WC_BLAKE2S_256_DIGEST_SIZE)
+	ret := Wc_Blake2s_HMAC_ex(want, []byte("msg"), []byte("key"), WC_BLAKE2S_256_DIGEST_SIZE)
+	if ret == notCompiledE {
+		t.Skip("BLAKE2s not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_Blake2s_HMAC_ex: %d", ret)
+	}
+	got := make([]byte, WC_BLAKE2S_256_DIGEST_SIZE)
+	Wc_Blake2s_HMAC(got, []byte("msg"), []byte("key"), WC_BLAKE2S_256_DIGEST_SIZE)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("wrapper output %x differs from %x", got, want)
+		}
+	}
+}
+
+func TestBlake2sHmacReportsErrors(t *testing.T) {
+	out := make([]byte, WC_BLAKE2S_256_DIGEST_SIZE)
+	ret := Wc_Blake2s_HMAC_ex(out, []byte("msg"), []byte("key"), WC_BLAKE2S_256_DIGEST_SIZE)
+	if ret == notCompiledE {
+		t.Skip("BLAKE2s not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_Blake2s_HMAC_ex: %d", ret)
+	}
+	if ret := Wc_Blake2s_HMAC_ex(out, []byte("msg"), []byte("key"), WC_BLAKE2S_128_DIGEST_SIZE); ret != BAD_FUNC_ARG {
+		t.Fatalf("unsupported outlen: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_Blake2s_HMAC_ex(out[:16], []byte("msg"), []byte("key"), WC_BLAKE2S_256_DIGEST_SIZE); ret != BAD_FUNC_ARG {
+		t.Fatalf("short out: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

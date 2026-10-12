@@ -231,6 +231,22 @@ func TestDERCertificateChainSendsIntermediates(t *testing.T) {
 	})
 }
 
+func TestDERCertificateChainRejectsEmptyEntries(t *testing.T) {
+	chain := newTestChain(t, nil)
+	clientCfg := &Config{ServerName: "chain.test", RootCAPEMs: [][]byte{chain.rootPEM}}
+	for name, ders := range map[string][][]byte{
+		"empty leaf":         {nil, chain.leafDER, chain.interDER},
+		"empty intermediate": {chain.leafDER, {}, chain.interDER},
+		"empty trailing":     {chain.leafDER, chain.interDER, nil},
+	} {
+		cert := Certificate{CertDER: ders, KeyDER: chain.keyDER}
+		res := runHandshake(t, &Config{Certificates: []Certificate{cert}}, clientCfg)
+		if res.serverErr == nil {
+			t.Errorf("%s: server accepted a DER chain with an empty entry", name)
+		}
+	}
+}
+
 func TestGetCertificateNilFallsBackToStatic(t *testing.T) {
 	skipWithoutGetCertificate(t)
 	chain := newTestChain(t, nil)
@@ -595,5 +611,45 @@ func TestCipherSuitesRejectsUnencodableEntries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			configRejected(t, &Config{InsecureSkipVerify: true, CipherSuites: suites}, true)
 		})
+	}
+}
+
+func TestCertSetupCallbackIDStaysInCIntRange(t *testing.T) {
+	setNext := func(v int) {
+		certCbMu.Lock()
+		certCbNextID = v
+		certCbMu.Unlock()
+	}
+	certCbMu.Lock()
+	saved := certCbNextID
+	certCbMu.Unlock()
+	defer setNext(saved)
+
+	noop := func(*wolfSSL.WOLFSSL) int { return 1 }
+	var ids []int
+	register := func() {
+		id := registerCertSetupCallback(noop)
+		ids = append(ids, id)
+		if id <= 0 || id != int(int32(id)) {
+			t.Fatalf("callback id %d does not fit a positive C int", id)
+		}
+	}
+	defer func() {
+		for _, id := range ids {
+			unregisterCertSetupCallback(id)
+		}
+	}()
+
+	setNext(0)
+	register()
+	setNext(1<<31 - 2)
+	register()
+	register()
+	if ids[1] != 1<<31-1 {
+		t.Fatalf("second id %d, want MaxInt32", ids[1])
+	}
+	// The third registration wraps; the first id is still live, so it is skipped.
+	if ids[2] >= ids[1] || ids[2] == ids[0] {
+		t.Fatalf("callback ids %v did not wrap past MaxInt32 to a free id", ids)
 	}
 }

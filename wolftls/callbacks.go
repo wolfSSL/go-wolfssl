@@ -294,7 +294,16 @@ var (
 func registerCertSetupCallback(cb certSetupCallbackFunc) int {
 	certCbMu.Lock()
 	defer certCbMu.Unlock()
-	certCbNextID++
+	// The id crosses C as an int, so wrap within it and skip live ids.
+	for {
+		certCbNextID++
+		if certCbNextID <= 0 || certCbNextID > 1<<31-1 {
+			certCbNextID = 1
+		}
+		if _, live := certCbCallbacks[certCbNextID]; !live {
+			break
+		}
+	}
 	id := certCbNextID
 	certCbCallbacks[id] = cb
 	return id

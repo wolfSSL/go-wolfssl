@@ -168,6 +168,9 @@ func (c *Conn) doHandshake() error {
 	if strings.IndexByte(c.config.ServerName, 0) >= 0 {
 		return errors.New("wolftls: ServerName contains NUL byte")
 	}
+	if err := checkNextProtos(c.config.NextProtos); err != nil {
+		return err
+	}
 
 	// A client with verification enabled must set ServerName; without it the
 	// certificate name is never checked, so reject rather than proceed. This is

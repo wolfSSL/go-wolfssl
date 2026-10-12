@@ -20,6 +20,11 @@
 
 package wolftls
 
+import (
+	"fmt"
+	"strings"
+)
+
 // TLS version constants, matching crypto/tls values.
 const (
 	VersionTLS10 = 0x0301
@@ -114,7 +119,8 @@ type Config struct {
 	GetCertificate func(*ClientHelloInfo) (*Certificate, error)
 
 	// NextProtos is a list of supported application-level protocols for ALPN
-	// negotiation, in order of preference.
+	// negotiation, in order of preference. Each entry must be 1-255 bytes
+	// and must not contain ',' or NUL, or the handshake is rejected.
 	NextProtos []string
 
 	// MinVersion is the minimum TLS version to accept.
@@ -182,6 +188,20 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &clone
+}
+
+// checkNextProtos rejects ALPN names that cannot be passed through
+// wolfSSL_UseALPN's comma-separated C string unchanged.
+func checkNextProtos(protos []string) error {
+	for _, p := range protos {
+		if len(p) == 0 || len(p) > 255 {
+			return fmt.Errorf("wolftls: invalid NextProtos entry length %d", len(p))
+		}
+		if strings.ContainsAny(p, ",\x00") {
+			return fmt.Errorf("wolftls: NextProtos entry %q contains ',' or NUL", p)
+		}
+	}
+	return nil
 }
 
 // derChain concatenates CertDER in order so the leaf and its intermediates

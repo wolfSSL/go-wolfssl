@@ -27,8 +27,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -264,5 +266,59 @@ func TestGetCertificateNilWithoutStaticFails(t *testing.T) {
 	if res.serverErr == nil || res.clientErr == nil {
 		t.Fatalf("handshake without any certificate succeeded: client %v, server %v",
 			res.clientErr, res.serverErr)
+	}
+}
+
+// untouchedConn fails every transport operation and records whether the
+// handshake tried to use it.
+type untouchedConn struct {
+	net.Conn
+	used bool
+}
+
+func (u *untouchedConn) Read([]byte) (int, error) {
+	u.used = true
+	return 0, errors.New("transport used")
+}
+func (u *untouchedConn) Write([]byte) (int, error) {
+	u.used = true
+	return 0, errors.New("transport used")
+}
+func (u *untouchedConn) Close() error { return nil }
+
+// configRejected runs a handshake that must fail on configuration alone,
+// before any byte reaches the transport.
+func configRejected(t *testing.T, cfg *Config, isClient bool) {
+	t.Helper()
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	u := &untouchedConn{Conn: a}
+	var c *Conn
+	if isClient {
+		c = Client(u, cfg)
+	} else {
+		c = Server(u, cfg)
+	}
+	defer c.Close()
+	err := c.Handshake()
+	if err == nil {
+		t.Fatal("handshake succeeded")
+	}
+	if u.used {
+		t.Fatalf("invalid config reached the transport: %v", err)
+	}
+}
+
+func TestNextProtosRejectsUnencodableEntries(t *testing.T) {
+	for name, protos := range map[string][]string{
+		"comma":    {"h2,http/1.1"},
+		"nul":      {"h2\x00x"},
+		"empty":    {"h2", ""},
+		"too-long": {strings.Repeat("a", 256)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configRejected(t, &Config{InsecureSkipVerify: true, NextProtos: protos}, true)
+		})
 	}
 }

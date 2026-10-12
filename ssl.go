@@ -533,15 +533,15 @@ func WolfSSL_get_peer_cert_chain_DER(ssl *WOLFSSL) [][]byte {
     chain := C.wolfSSL_get_peer_chain(ssl)
     if chain != nil {
         count := int(C.wolfSSL_get_chain_count(chain))
-        for i := 0; i < count; i++ {
+        certs = wrapperCollectChainDER(count, func(i int) []byte {
             length := int(C.wolfSSL_get_chain_length(chain, C.int(i)))
-            if length <= 0 { continue }
+            if length <= 0 { return nil }
             // wolfSSL_get_chain_cert returns an internal pointer — copy now.
             ptr := C.wolfSSL_get_chain_cert(chain, C.int(i))
-            if ptr == nil { continue }
-            certs = append(certs, C.GoBytes(unsafe.Pointer(ptr), C.int(length)))
-        }
-        if len(certs) > 0 {
+            if ptr == nil { return nil }
+            return C.GoBytes(unsafe.Pointer(ptr), C.int(length))
+        })
+        if count > 0 {
             return certs
         }
     }

@@ -215,3 +215,50 @@ func TestLoadVerifyLocationsUsesCADirectory(t *testing.T) {
         t.Fatalf("loading CA file failed: %d", ret)
     }
 }
+
+func TestPeerChainDERRejectsMissingEntry(t *testing.T) {
+    entries := [][]byte{nil, []byte("intermediate"), []byte("root")}
+    got := wrapperCollectChainDER(len(entries), func(i int) []byte { return entries[i] })
+    if got != nil {
+        t.Fatalf("chain with an unreadable entry returned %d certs", len(got))
+    }
+    entries[0] = []byte("leaf")
+    got = wrapperCollectChainDER(len(entries), func(i int) []byte { return entries[i] })
+    if len(got) != 3 || string(got[0]) != "leaf" || string(got[2]) != "root" {
+        t.Fatalf("complete chain not returned in order: %q", got)
+    }
+}
+
+func TestPeerChainDERMatchesServerChain(t *testing.T) {
+    p := newTLSTestPair(t)
+    srvRet, cliRet := p.handshake(t)
+    if srvRet != WOLFSSL_SUCCESS || cliRet != WOLFSSL_SUCCESS {
+        t.Fatalf("handshake failed (srv=%d cli=%d)", srvRet, cliRet)
+    }
+    rest := readTestFile(t, "server-cert.pem")
+    var want [][]byte
+    for {
+        var block *pem.Block
+        block, rest = pem.Decode(rest)
+        if block == nil { break }
+        want = append(want, block.Bytes)
+    }
+    got := WolfSSL_get_peer_cert_chain_DER(p.cli)
+    if len(got) == 0 {
+        t.Skip("wolfSSL built without peer certificate retention")
+    }
+    if len(got) == 1 {
+        if string(got[0]) != string(want[0]) {
+            t.Fatal("leaf differs from server certificate")
+        }
+        return
+    }
+    if len(got) != len(want) {
+        t.Fatalf("got %d chain certs, want %d", len(got), len(want))
+    }
+    for i := range want {
+        if string(got[i]) != string(want[i]) {
+            t.Fatalf("chain entry %d differs", i)
+        }
+    }
+}

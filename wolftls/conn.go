@@ -203,6 +203,9 @@ func (c *Conn) doHandshake() error {
 			c.freeCtxLocked()
 			return fmt.Errorf("wolftls: set_min_proto_version(0x%x) rejected: %d", c.config.MinVersion, ret)
 		}
+	} else if ret := setDefaultMinVersion(c.ctx); ret != wolfSSL.WOLFSSL_SUCCESS {
+		c.freeCtxLocked()
+		return fmt.Errorf("wolftls: setting the default TLS 1.2 minimum failed: %d", ret)
 	}
 	if c.config.MaxVersion != 0 {
 		if ret := wolfSSL.WolfSSL_CTX_set_max_proto_version(c.ctx, int(c.config.MaxVersion)); ret != wolfSSL.WOLFSSL_SUCCESS {

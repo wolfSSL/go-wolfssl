@@ -357,3 +357,52 @@ func TestMissingPeerChainFailsBeforeCallbacks(t *testing.T) {
 		t.Fatalf("failed handshake left connection state %+v", st)
 	}
 }
+
+func legacyOnly(cfg *Config) *Config {
+	cfg.MinVersion = VersionTLS11
+	cfg.MaxVersion = VersionTLS11
+	return cfg
+}
+
+func TestZeroMinVersionRefusesLegacyTLS(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	server := func() *Config {
+		return &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}}
+	}
+	client := func() *Config { return &Config{InsecureSkipVerify: true} }
+
+	probe := runHandshake(t, legacyOnly(server()), legacyOnly(client()))
+	if probe.clientErr != nil || probe.serverErr != nil || probe.client.Version != VersionTLS11 {
+		t.Skipf("wolfSSL cannot negotiate TLS 1.1: client %v, server %v", probe.clientErr, probe.serverErr)
+	}
+
+	t.Run("server", func(t *testing.T) {
+		res := runHandshake(t, server(), legacyOnly(client()))
+		if res.serverErr == nil {
+			t.Fatalf("server with zero MinVersion accepted version 0x%x", res.server.Version)
+		}
+	})
+	t.Run("client", func(t *testing.T) {
+		res := runHandshake(t, legacyOnly(server()), client())
+		if res.clientErr == nil {
+			t.Fatalf("client with zero MinVersion accepted version 0x%x", res.client.Version)
+		}
+	})
+}
+
+func TestExplicitMinVersionKeepsLegacyTLS(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	serverCfg := legacyOnly(&Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	res := runHandshake(t, serverCfg, legacyOnly(&Config{InsecureSkipVerify: true}))
+	if res.clientErr != nil && strings.Contains(res.clientErr.Error(), "proto_version") {
+		t.Skipf("wolfSSL built without TLS 1.1: %v", res.clientErr)
+	}
+	if res.clientErr != nil || res.serverErr != nil {
+		t.Fatalf("explicit TLS 1.1 handshake: client %v, server %v", res.clientErr, res.serverErr)
+	}
+	if res.client.Version != VersionTLS11 {
+		t.Fatalf("negotiated 0x%x, want TLS 1.1", res.client.Version)
+	}
+}

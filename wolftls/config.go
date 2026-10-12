@@ -20,9 +20,31 @@
 
 package wolftls
 
+// #include <wolfssl/options.h>
+// #include <wolfssl/ssl.h>
+//
+// static int wolftls_set_default_min_version(WOLFSSL_CTX* ctx) {
+// #ifdef WOLFSSL_SYS_CRYPTO_POLICY
+//     if (wolfSSL_crypto_policy_is_enabled())
+//         return WOLFSSL_SUCCESS;
+// #endif
+// #if !defined(WOLFSSL_NO_TLS12)
+//     return wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_2);
+// #elif defined(WOLFSSL_TLS13)
+//     return wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_3);
+// #else
+//     (void)ctx;
+//     return WOLFSSL_FAILURE;
+// #endif
+// }
+import "C"
+
 import (
 	"fmt"
 	"strings"
+	"unsafe"
+
+	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 
 // TLS version constants, matching crypto/tls values.
@@ -124,7 +146,8 @@ type Config struct {
 	NextProtos []string
 
 	// MinVersion is the minimum TLS version to accept.
-	// Zero means no minimum (wolfSSL default, typically TLS 1.2).
+	// Zero means TLS 1.2, matching crypto/tls, unless a system crypto
+	// policy owns the floor.
 	MinVersion uint16
 
 	// MaxVersion is the maximum TLS version to accept.
@@ -188,6 +211,12 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &clone
+}
+
+// setDefaultMinVersion sets the TLS 1.2 floor used when MinVersion is zero.
+// It uses the native setter, which builds without OPENSSL_EXTRA also have.
+func setDefaultMinVersion(ctx *wolfSSL.WOLFSSL_CTX) int {
+	return int(C.wolftls_set_default_min_version((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx))))
 }
 
 // checkNextProtos rejects ALPN names that cannot be passed through

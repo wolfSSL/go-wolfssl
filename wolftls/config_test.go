@@ -585,3 +585,15 @@ func TestGetCertificateErrorIsReturned(t *testing.T) {
 		t.Fatalf("server error %v does not wrap the GetCertificate error", res.serverErr)
 	}
 }
+
+func TestCipherSuitesRejectsUnencodableEntries(t *testing.T) {
+	const suite = "TLS13-AES128-GCM-SHA256"
+	for name, suites := range map[string][]string{
+		"nul":   {suite + "\x00ECDHE-RSA-NULL-SHA"},
+		"empty": {suite, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configRejected(t, &Config{InsecureSkipVerify: true, CipherSuites: suites}, true)
+		})
+	}
+}

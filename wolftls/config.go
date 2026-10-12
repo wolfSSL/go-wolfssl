@@ -186,7 +186,8 @@ type Config struct {
 	VerifyPeerCertificate func(rawCerts [][]byte) error
 
 	// CipherSuites is the list of enabled cipher suites. If nil, a default
-	// list is used. Each element is a wolfSSL cipher suite name string.
+	// list is used. Each element is a wolfSSL cipher suite name string; an
+	// empty element or one containing NUL rejects the handshake.
 	CipherSuites []string
 
 	// ClientAuth controls how the server handles client certificates.
@@ -296,6 +297,17 @@ func checkNextProtos(protos []string) error {
 		}
 		if strings.ContainsAny(p, ",\x00") {
 			return fmt.Errorf("wolftls: NextProtos entry %q contains ',' or NUL", p)
+		}
+	}
+	return nil
+}
+
+// checkCipherSuites rejects entries a C string would truncate or that are
+// empty; ':' is kept so pre-joined wolfSSL cipher lists still work.
+func checkCipherSuites(suites []string) error {
+	for _, cs := range suites {
+		if cs == "" || strings.IndexByte(cs, 0) >= 0 {
+			return fmt.Errorf("wolftls: invalid CipherSuites entry %q", cs)
 		}
 	}
 	return nil

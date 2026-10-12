@@ -171,6 +171,9 @@ func (c *Conn) doHandshake() error {
 	if err := checkNextProtos(c.config.NextProtos); err != nil {
 		return err
 	}
+	if err := checkCipherSuites(c.config.CipherSuites); err != nil {
+		return err
+	}
 
 	// A client with verification enabled must set ServerName; without it the
 	// certificate name is never checked, so reject rather than proceed. This is

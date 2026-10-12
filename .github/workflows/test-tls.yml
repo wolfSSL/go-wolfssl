@@ -118,6 +118,9 @@ jobs:
           go build examples/x509/certVerify.go
           go build examples/x509/extractKey.go
 
+      - name: Run AES file example tests
+        run: go test ./examples/aes-encrypt
+
       - name: Show logs on failure
         if: failure() || cancelled()
         run: |

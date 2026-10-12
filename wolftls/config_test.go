@@ -26,8 +26,10 @@ import (
 	crand "crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"strings"
@@ -422,6 +424,98 @@ func TestIPServerNameNotSentAsSNI(t *testing.T) {
 			}
 			if res.client.ServerName != "" {
 				t.Fatalf("client reports SNI %q for an IP literal", res.client.ServerName)
+			}
+		})
+	}
+}
+
+func TestIPServerNameVerifiesIPSAN(t *testing.T) {
+	ipChain := newTestChain(t, func(c *x509.Certificate) {
+		c.DNSNames = nil
+		c.IPAddresses = []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	})
+	dnsChain := newTestChain(t, func(c *x509.Certificate) {
+		c.DNSNames = []string{"127.0.0.1"}
+	})
+	otherIPChain := newTestChain(t, func(c *x509.Certificate) {
+		c.DNSNames = nil
+		c.IPAddresses = []net.IP{net.ParseIP("127.0.0.2")}
+	})
+	cnOnly := func(cn string) testChain {
+		return newTestChain(t, func(c *x509.Certificate) {
+			c.DNSNames = nil
+			c.Subject.CommonName = cn
+		})
+	}
+	cnV4Chain := cnOnly("127.0.0.1")
+	cnV6Chain := cnOnly("0000:0000:0000:0000:0000:0000:0000:0001")
+	cnV6ShortChain := cnOnly("::1")
+	mappedChain := newTestChain(t, func(c *x509.Certificate) {
+		c.DNSNames = nil
+		san, err := asn1.Marshal([]asn1.RawValue{{
+			Class: asn1.ClassContextSpecific,
+			Tag:   7,
+			Bytes: net.ParseIP("127.0.0.1").To16(),
+		}})
+		if err != nil {
+			t.Fatalf("SAN: %v", err)
+		}
+		c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san}}
+	})
+	server := func(ch testChain) *Config {
+		return &Config{Certificates: []Certificate{{
+			CertDER: [][]byte{ch.leafDER, ch.interDER},
+			KeyDER:  ch.keyDER,
+		}}}
+	}
+	client := func(ch testChain, name string) *Config {
+		return &Config{ServerName: name, RootCAPEMs: [][]byte{ch.rootPEM}}
+	}
+	var major, minor, patch int
+	fmt.Sscanf(wolfSSL.WolfSSL_lib_version(), "%d.%d.%d", &major, &minor, &patch)
+	cnSafeIPCheck := major*1000000+minor*1000+patch >= 5009002
+
+	for _, tc := range []struct {
+		name   string
+		chain  testChain
+		server string
+		ok     bool
+	}{
+		{"ipv4 SAN", ipChain, "127.0.0.1", true},
+		{"ipv6 SAN", ipChain, "::1", true},
+		{"ipv6 SAN bracketed", ipChain, "[::1]", true},
+		{"ipv6 SAN scoped", ipChain, "::1%lo", true},
+		{"ipv4-mapped scoped", ipChain, "::ffff:127.0.0.1%lo", true},
+		// RFC 5280 encodes an IPv4 iPAddress SAN in four octets only.
+		{"ipv4 vs 16-byte mapped SAN", mappedChain, "127.0.0.1", false},
+		{"mapped vs 16-byte mapped SAN", mappedChain, "::ffff:127.0.0.1", false},
+		{"ipv4 with zone", ipChain, "127.0.0.1%lo", false},
+		{"ipv6 empty zone", ipChain, "::1%", false},
+		{"DNS SAN only", dnsChain, "127.0.0.1", false},
+		{"other IP SAN", otherIPChain, "127.0.0.1", false},
+		{"ipv4 CN only", cnV4Chain, "127.0.0.1", false},
+		{"ipv6 CN only", cnV6Chain, "::1", false},
+		{"ipv6 CN only bracketed", cnV6Chain, "[::1]", false},
+		{"ipv6 CN only scoped", cnV6Chain, "::1%lo", false},
+		{"ipv6 short CN only", cnV6ShortChain, "::1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runHandshake(t, server(tc.chain), client(tc.chain, tc.server))
+			if res.clientErr != nil && strings.Contains(res.clientErr.Error(), "wolfSSL 5.9.2 or later") && cnSafeIPCheck {
+				t.Fatalf("wolfSSL %s should support IP checks: %v", wolfSSL.WolfSSL_lib_version(), res.clientErr)
+			}
+			if res.clientErr != nil && strings.Contains(res.clientErr.Error(), "verifying an IP ServerName requires") {
+				if !tc.ok {
+					return
+				}
+				t.Skip(res.clientErr)
+			}
+			if tc.ok && res.clientErr != nil {
+				t.Fatalf("handshake failed: client %v, server %v", res.clientErr, res.serverErr)
+			}
+			if !tc.ok && (res.clientErr == nil || res.serverErr == nil) {
+				t.Fatalf("certificate without a matching IP SAN: client %v, server %v",
+					res.clientErr, res.serverErr)
 			}
 		})
 	}

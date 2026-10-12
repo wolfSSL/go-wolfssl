@@ -20,8 +20,26 @@
 
 package wolftls
 
+// #include <stdlib.h>
 // #include <wolfssl/options.h>
 // #include <wolfssl/ssl.h>
+//
+// /* Before 5.9.2 an IP check also fell back to the subject CN. */
+// static int wolftls_check_ip_address(WOLFSSL* ssl, const char* ip) {
+// #if !defined(WOLFSSL_IP_ALT_NAME)
+//     (void)ssl; (void)ip;
+//     return -2;
+// #elif LIBWOLFSSL_VERSION_HEX >= 0x05009002 || \
+//     (LIBWOLFSSL_VERSION_HEX >= 0x05009001 && \
+//      defined(WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY))
+//     return wolfSSL_check_ip_address(ssl, ip);
+// #elif defined(OPENSSL_EXTRA) && defined(WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY)
+//     return wolfSSL_X509_VERIFY_PARAM_set1_ip_asc(wolfSSL_get0_param(ssl), ip);
+// #else
+//     (void)ssl; (void)ip;
+//     return -1;
+// #endif
+// }
 //
 // static int wolftls_set_default_min_version(WOLFSSL_CTX* ctx) {
 // #ifdef WOLFSSL_SYS_CRYPTO_POLICY
@@ -103,7 +121,8 @@ type Certificate struct {
 type Config struct {
 	// ServerName is the value sent in the SNI extension and, for clients, is
 	// used for hostname verification. An IP literal (optionally bracketed,
-	// IPv6 may carry a zone) is not sent in SNI. A client that verifies the peer
+	// IPv6 may carry a zone) is not sent in SNI and is verified against the
+	// certificate's IP SANs instead. A client that verifies the peer
 	// (InsecureSkipVerify == false) must set ServerName: otherwise the
 	// certificate name is never checked, so doHandshake rejects the connection
 	// before the handshake, matching crypto/tls. Set InsecureSkipVerify to
@@ -222,15 +241,50 @@ func setDefaultMinVersion(ctx *wolfSSL.WOLFSSL_CTX) int {
 }
 
 // serverNameIP returns the address when ServerName is an IP literal
-// (optionally bracketed or with an IPv6 zone), or nil for a host name.
+// (optionally bracketed, IPv6 may carry a zone), or nil for a host name.
 func serverNameIP(name string) net.IP {
 	if len(name) >= 2 && name[0] == '[' && name[len(name)-1] == ']' {
 		name = name[1 : len(name)-1]
 	}
-	if i := strings.LastIndexByte(name, '%'); i > 0 {
-		name = name[:i]
+	zone := ""
+	if i := strings.IndexByte(name, '%'); i >= 0 {
+		name, zone = name[:i], name[i+1:]
+		if zone == "" {
+			return nil
+		}
 	}
-	return net.ParseIP(name)
+	ip := net.ParseIP(name)
+	if ip == nil || (zone != "" && strings.IndexByte(name, ':') < 0) {
+		return nil
+	}
+	return ip
+}
+
+// ipCheckUnavailable is returned by sslCheckIPAddress when the wolfSSL build
+// has no IP check that ignores the subject CN.
+const ipCheckUnavailable = -1
+
+// ipAltNameMissing is returned by sslCheckIPAddress when wolfSSL does not
+// decode IP SANs (built without WOLFSSL_IP_ALT_NAME).
+const ipAltNameMissing = -2
+
+// sslCheckIPAddress makes wolfSSL match the peer leaf's IP SANs against ip.
+// wolfSSL renders IPv6 SANs as eight uppercase four-digit groups.
+func sslCheckIPAddress(ssl *wolfSSL.WOLFSSL, ip net.IP) int {
+	asc := ip.String()
+	if v4 := ip.To4(); v4 == nil {
+		var b strings.Builder
+		for i := 0; i < net.IPv6len; i += 2 {
+			if i > 0 {
+				b.WriteByte(':')
+			}
+			fmt.Fprintf(&b, "%02X%02X", ip[i], ip[i+1])
+		}
+		asc = b.String()
+	}
+	cs := C.CString(asc)
+	defer C.free(unsafe.Pointer(cs))
+	return int(C.wolftls_check_ip_address((*C.WOLFSSL)(unsafe.Pointer(ssl)), cs))
 }
 
 // checkNextProtos rejects ALPN names that cannot be passed through

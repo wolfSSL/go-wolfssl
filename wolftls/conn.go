@@ -390,7 +390,20 @@ func (c *Conn) doHandshake() error {
 	// Bind the expected hostname so wolfSSL checks the server leaf
 	// certificate's SAN/CN against it during the handshake
 	if c.isClient && c.config.ServerName != "" && !c.config.InsecureSkipVerify {
-		ret := wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		var ret int
+		if ip := serverNameIP(c.config.ServerName); ip != nil {
+			ret = sslCheckIPAddress(c.ssl, ip)
+		} else {
+			ret = wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		}
+		switch ret {
+		case ipAltNameMissing:
+			c.freeSSL()
+			return errors.New("wolftls: verifying an IP ServerName requires wolfSSL built with WOLFSSL_IP_ALT_NAME")
+		case ipCheckUnavailable:
+			c.freeSSL()
+			return errors.New("wolftls: verifying an IP ServerName requires wolfSSL 5.9.2 or later, or WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY")
+		}
 		if ret != wolfSSL.WOLFSSL_SUCCESS {
 			c.freeSSL()
 			return fmt.Errorf("wolftls: failed to set domain name check (%d)", ret)

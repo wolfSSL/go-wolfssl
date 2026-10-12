@@ -255,11 +255,16 @@ func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) i
 
 func WolfSSL_CTX_load_verify_locations(ctx *C.struct_WOLFSSL_CTX, cert string,
                                        path []byte) int {
-    cert_file := C.CString(cert)
-    defer C.free(unsafe.Pointer(cert_file))
-    /* TODO: HANDLE NON NIL PATH */
-    return int(C.wolfSSL_CTX_load_verify_locations(ctx, cert_file,
-               (*C.char)(unsafe.Pointer(nil))))
+    var cert_file, cert_path *C.char
+    if cert != "" {
+        cert_file = C.CString(cert)
+        defer C.free(unsafe.Pointer(cert_file))
+    }
+    if len(path) > 0 {
+        cert_path = C.CString(string(path))
+        defer C.free(unsafe.Pointer(cert_path))
+    }
+    return int(C.wolfSSL_CTX_load_verify_locations(ctx, cert_file, cert_path))
 }
 
 func WolfSSL_CTX_use_certificate_file(ctx *C.struct_WOLFSSL_CTX, cert string,

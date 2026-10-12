@@ -196,3 +196,22 @@ func TestD2iX509ParsesDER(t *testing.T) {
         t.Fatalf("re-encoded DER differs from input (n=%d)", n)
     }
 }
+
+func TestLoadVerifyLocationsUsesCADirectory(t *testing.T) {
+    dir := t.TempDir()
+    if err := os.WriteFile(dir+"/ca-cert.pem", readTestFile(t, "ca-cert.pem"), 0600); err != nil {
+        t.Fatal(err)
+    }
+    WolfSSL_Init()
+    ctx := WolfSSL_CTX_new_v23_client()
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    if ret := WolfSSL_CTX_load_verify_locations(ctx, "", []byte(dir)); ret != WOLFSSL_SUCCESS {
+        t.Fatalf("loading CA directory failed: %d", ret)
+    }
+    if ret := WolfSSL_CTX_load_verify_locations(ctx, testCertDir+"ca-cert.pem", nil); ret != WOLFSSL_SUCCESS {
+        t.Fatalf("loading CA file failed: %d", ret)
+    }
+}

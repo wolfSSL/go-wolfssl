@@ -63,15 +63,15 @@ func main() {
         os.Exit(1)
     }
 
-    /* Get address of TCP end point */
-    tcpAddr, err := net.ResolveUDPAddr(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+    /* Get address of UDP end point */
+    udpAddr, err := net.ResolveUDPAddr(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
     if err != nil {
-        println("ResolveTCPAddr failed:", err.Error())
+        println("ResolveUDPAddr failed:", err.Error())
         os.Exit(1)
     }
 
-    /* Dial the recieved TCP address */
-    conn, err := net.DialUDP(CONN_TYPE, nil, tcpAddr)
+    /* Dial the recieved UDP address */
+    conn, err := net.DialUDP(CONN_TYPE, nil, udpAddr)
     if err != nil {
         println("Dial failed:", err.Error())
         os.Exit(1)
@@ -87,7 +87,7 @@ func main() {
     addr := wolfSSL.WolfSSL_dtls_create_peer(port, CONN_HOST);
     wolfSSL.WolfSSL_dtls_set_peer(ssl, addr, 16)
 
-    /* Retrieve file descriptor from net.*TCPConn type */
+    /* Retrieve file descriptor from net.*UDPConn type */
     file,err := conn.File()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))

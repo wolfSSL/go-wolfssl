@@ -58,13 +58,11 @@ func (a *AesGcmAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
 	if aes == nil {
 		panic("wolfSSL/handles: Wc_AesAllocAligned returned nil")
 	}
-	defer func() {
-		wolfSSL.Wc_AesFree(aes)
-		wolfSSL.Wc_AesFreeAllocAligned(aes)
-	}()
+	defer wolfSSL.Wc_AesFreeAllocAligned(aes)
 	if ret := wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID); ret != 0 {
 		panic(fmt.Sprintf("wolfSSL/handles: wc_AesInit failed: %d", ret))
 	}
+	defer wolfSSL.Wc_AesFree(aes)
 	if ret := wolfSSL.Wc_AesGcmSetKey(aes, a.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
 		panic(fmt.Sprintf("wolfSSL/handles: wc_AesGcmSetKey failed: %d", ret))
 	}
@@ -96,13 +94,11 @@ func (a *AesGcmAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte
 	if aes == nil {
 		return nil, errAesGcmAuth
 	}
-	defer func() {
-		wolfSSL.Wc_AesFree(aes)
-		wolfSSL.Wc_AesFreeAllocAligned(aes)
-	}()
+	defer wolfSSL.Wc_AesFreeAllocAligned(aes)
 	if ret := wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID); ret != 0 {
 		return nil, errAesGcmAuth
 	}
+	defer wolfSSL.Wc_AesFree(aes)
 	if ret := wolfSSL.Wc_AesGcmSetKey(aes, a.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
 		return nil, errAesGcmAuth
 	}

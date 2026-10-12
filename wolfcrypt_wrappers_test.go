@@ -813,3 +813,28 @@ func TestHKDFRejectsOversizedLengths(t *testing.T) {
 		}
 	}
 }
+
+func TestBlake2sFinalDefaultSizeShortOutput(t *testing.T) {
+	b2s := new(Blake2s)
+	if ret := Wc_InitBlake2s(b2s, WC_BLAKE2S_256_DIGEST_SIZE); ret == notCompiledE {
+		t.Skip("BLAKE2s not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_InitBlake2s: %d", ret)
+	}
+	buf := make([]byte, WC_BLAKE2S_256_DIGEST_SIZE)
+	for i := range buf {
+		buf[i] = 0xA5
+	}
+	short := buf[:WC_BLAKE2S_128_DIGEST_SIZE]
+	if ret := Wc_Blake2sFinal(b2s, short, 0); ret != BAD_FUNC_ARG {
+		t.Fatalf("short out with default size: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	for i := len(short); i < len(buf); i++ {
+		if buf[i] != 0xA5 {
+			t.Fatalf("wrote past end of output at offset %d", i)
+		}
+	}
+	if ret := Wc_Blake2sFinal(b2s, buf, 0); ret != 0 {
+		t.Fatalf("full out with default size: %d", ret)
+	}
+}

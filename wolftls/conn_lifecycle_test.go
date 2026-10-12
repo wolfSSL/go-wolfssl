@@ -106,14 +106,14 @@ func TestWriteProceedsWhileReadWaits(t *testing.T) {
 	}
 }
 
-// panicConn panics from Read or Write once the matching flag is set.
-type panicConn struct {
+// panickingTransport panics from Read or Write once the matching flag is set.
+type panickingTransport struct {
 	net.Conn
 	readPanics  int32
 	writePanics int32
 }
 
-func (p *panicConn) Read(b []byte) (int, error) {
+func (p *panickingTransport) Read(b []byte) (int, error) {
 	switch atomic.LoadInt32(&p.readPanics) {
 	case 1:
 		panic("transport read failure")
@@ -124,7 +124,7 @@ func (p *panicConn) Read(b []byte) (int, error) {
 	return p.Conn.Read(b)
 }
 
-func (p *panicConn) Write(b []byte) (int, error) {
+func (p *panickingTransport) Write(b []byte) (int, error) {
 	switch atomic.LoadInt32(&p.writePanics) {
 	case 1:
 		panic("transport write failure")
@@ -137,8 +137,8 @@ func (p *panicConn) Write(b []byte) (int, error) {
 	return p.Conn.Write(b)
 }
 
-// callNoPanic runs f and fails the test if a panic escapes it.
-func callNoPanic(t *testing.T, f func() error) error {
+// runWithoutPanic runs f and fails the test if a panic escapes it.
+func runWithoutPanic(t *testing.T, f func() error) error {
 	t.Helper()
 	var err error
 	var escaped interface{}
@@ -157,24 +157,24 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 		cConn, sConn := net.Pipe()
 		defer sConn.Close()
 		go io.Copy(io.Discard, sConn)
-		pc := &panicConn{Conn: cConn, readPanics: 1}
+		pc := &panickingTransport{Conn: cConn, readPanics: 1}
 		cli := Client(pc, &Config{ServerName: "localhost", InsecureSkipVerify: true})
 		defer cli.Close()
-		if err := callNoPanic(t, cli.Handshake); err == nil {
+		if err := runWithoutPanic(t, cli.Handshake); err == nil {
 			t.Fatal("handshake succeeded over a panicking transport")
 		}
 	})
 
 	t.Run("transport write", func(t *testing.T) {
-		var pc *panicConn
+		var pc *panickingTransport
 		cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
-			pc = &panicConn{Conn: c}
+			pc = &panickingTransport{Conn: c}
 			return pc
 		})
 		defer cleanup()
 		atomic.StoreInt32(&pc.writePanics, 1)
 		defer atomic.StoreInt32(&pc.writePanics, 0)
-		err := callNoPanic(t, func() error {
+		err := runWithoutPanic(t, func() error {
 			_, err := cli.Write([]byte("data"))
 			return err
 		})
@@ -184,9 +184,9 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 	})
 
 	t.Run("transport write nil panic", func(t *testing.T) {
-		var pc *panicConn
+		var pc *panickingTransport
 		cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
-			pc = &panicConn{Conn: c}
+			pc = &panickingTransport{Conn: c}
 			return pc
 		})
 		defer cleanup()
@@ -208,9 +208,9 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 	})
 
 	t.Run("transport write after partial output", func(t *testing.T) {
-		var pc *panicConn
+		var pc *panickingTransport
 		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
-			pc = &panicConn{Conn: c}
+			pc = &panickingTransport{Conn: c}
 			return pc
 		})
 		defer cleanup()
@@ -226,7 +226,7 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 		msg := make([]byte, 100)
 		atomic.StoreInt32(&pc.writePanics, 3)
 		defer atomic.StoreInt32(&pc.writePanics, 0)
-		err := callNoPanic(t, func() error {
+		err := runWithoutPanic(t, func() error {
 			_, err := cli.Write(msg)
 			return err
 		})
@@ -245,9 +245,9 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 	})
 
 	t.Run("transport read after partial input", func(t *testing.T) {
-		var pc *panicConn
+		var pc *panickingTransport
 		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
-			pc = &panicConn{Conn: c}
+			pc = &panickingTransport{Conn: c}
 			return pc
 		})
 		defer cleanup()
@@ -265,7 +265,7 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 		if _, err := srv.Write([]byte("data")); err != nil {
 			t.Fatalf("server write: %v", err)
 		}
-		err := callNoPanic(t, func() error {
+		err := runWithoutPanic(t, func() error {
 			_, err := cli.Read(make([]byte, 16))
 			return err
 		})
@@ -290,13 +290,13 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 				panic("certificate lookup failure")
 			},
 		}
-		cConn, sConn := tcpPair(t)
+		cConn, sConn := lifecycleTCPPair(t)
 		cli := Client(cConn, &Config{ServerName: "localhost", InsecureSkipVerify: true})
 		defer cli.Close()
 		go cli.Handshake()
 		srv := Server(sConn, serverConfig)
 		defer srv.Close()
-		err := callNoPanic(t, srv.Handshake)
+		err := runWithoutPanic(t, srv.Handshake)
 		if atomic.LoadInt32(&called) == 0 {
 			t.Skip("wolfSSL built without WOLFSSL_CERT_SETUP_CB; GetCertificate not invoked")
 		}
@@ -306,7 +306,7 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 	})
 }
 
-func tcpPair(t *testing.T) (client, server net.Conn) {
+func lifecycleTCPPair(t *testing.T) (client, server net.Conn) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -885,21 +885,40 @@ func TestCloseBeforeHandshake(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	err := callNoPanic(t, func() error {
+	err := runWithoutPanic(t, func() error {
 		_, err := cli.Read(make([]byte, 16))
 		return err
 	})
 	if !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Read after Close: got %v, want net.ErrClosed", err)
 	}
-	err = callNoPanic(t, func() error {
+	err = runWithoutPanic(t, func() error {
 		_, err := cli.Write([]byte("data"))
 		return err
 	})
 	if !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Write after Close: got %v, want net.ErrClosed", err)
 	}
-	if err := callNoPanic(t, cli.Handshake); !errors.Is(err, net.ErrClosed) {
+	if err := runWithoutPanic(t, cli.Handshake); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Handshake after Close: got %v, want net.ErrClosed", err)
+	}
+}
+
+func TestConcurrentClose(t *testing.T) {
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	done := make(chan struct{}, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			cli.Close()
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		select {
+		case <-done:
+		case <-time.After(lifecycleTimeout):
+			t.Fatal("concurrent Close did not return")
+		}
 	}
 }

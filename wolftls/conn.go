@@ -850,8 +850,11 @@ func (c *Conn) Close() error {
 	// release their RLock and this Close can proceed with Lock. The
 	// same kick aborts an in-flight wolfSSL_connect/accept inside
 	// doHandshake so we can safely take handshakeMu next.
-	if c.conn != nil {
-		c.conn.SetDeadline(time.Unix(1, 0))
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn != nil {
+		conn.SetDeadline(time.Unix(1, 0))
 	}
 	// Block until any concurrent doHandshake finishes — otherwise
 	// freeSSLLocked below would free c.ssl/c.ctx out from under it

@@ -54,6 +54,9 @@ type recordingConn struct {
 	buffered bool
 	pending  []byte
 	fills    uint64
+	// deferredErr came back from the transport together with data; it is
+	// reported by the next read, after wolfSSL has consumed that data.
+	deferredErr error
 	// writeDeadErr, once a send times out, stops every later transport write.
 	writeDeadErr error
 }
@@ -77,10 +80,23 @@ func (r *recordingConn) deadWriteErr() error {
 }
 
 func (r *recordingConn) Read(b []byte) (int, error) {
+	r.mu.Lock()
+	if err := r.deferredErr; err != nil {
+		r.deferredErr = nil
+		r.lastReadErr = err
+		r.mu.Unlock()
+		return 0, err
+	}
+	r.mu.Unlock()
 	n, err := r.Conn.Read(b)
 	if err != nil {
 		r.mu.Lock()
-		r.lastReadErr = err
+		if n > 0 {
+			r.deferredErr = err
+			err = nil
+		} else {
+			r.lastReadErr = err
+		}
 		r.mu.Unlock()
 	}
 	return n, err
@@ -128,15 +144,28 @@ func (r *recordingConn) takeBuffered(b []byte) (n int, ok bool) {
 
 // fill blocks on the transport and queues what arrives for the recv callback.
 func (r *recordingConn) fill(b []byte) error {
-	n, err := guardTransport(r.Conn, func() (int, error) { return r.Conn.Read(b) })
-	if n > 0 {
-		r.mu.Lock()
-		r.fills++
-		r.pending = append(r.pending, b[:n]...)
+	r.mu.Lock()
+	if err := r.deferredErr; err != nil {
+		r.deferredErr = nil
 		r.mu.Unlock()
-		return nil
+		return err
 	}
-	return err
+	r.mu.Unlock()
+	for i := 0; i < maxEmptyTransportOps; i++ {
+		n, err := guardTransport(r.Conn, func() (int, error) { return r.Conn.Read(b) })
+		if n > 0 {
+			r.mu.Lock()
+			r.fills++
+			r.pending = append(r.pending, b[:n]...)
+			r.deferredErr = err
+			r.mu.Unlock()
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return io.ErrNoProgress
 }
 
 // maxEmptyTransportOps bounds retries of a transport that makes no progress,
@@ -624,6 +653,9 @@ func (c *Conn) Read(b []byte) (int, error) {
 	c.muRead.Lock()
 	defer c.muRead.Unlock()
 	rc, _ := c.conn.(*recordingConn)
+	if rc != nil {
+		rc.takeLastReadErr()
+	}
 	var gen uint64
 	if rc != nil {
 		gen = rc.fillCount()

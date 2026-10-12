@@ -441,6 +441,33 @@ func TestWriteWithoutProgressFails(t *testing.T) {
 	}
 }
 
+func TestReadWithoutProgressFails(t *testing.T) {
+	var ec *emptyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &emptyConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+	if cli.sslMu == nil {
+		t.Skip("write dup splits the session; no shared input pump")
+	}
+
+	atomic.StoreInt32(&ec.reads, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.ErrNoProgress) {
+			t.Fatalf("Read err = %v, want io.ErrNoProgress", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read kept retrying a transport that makes no progress")
+	}
+}
+
 // readCounter counts transport Reads and signals each one.
 type readCounter struct {
 	net.Conn
@@ -750,5 +777,70 @@ func TestWriteTimeoutKeepsStreamConsistent(t *testing.T) {
 	}
 	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil {
 		t.Fatalf("after the reported bytes: n=%d err=%v, want the stream to end", n, err)
+	}
+}
+
+var errAfterData = errors.New("transport error after data")
+
+// errAfterRecordConn, once armed, stages the next TLS record from the
+// transport and returns errAfterData together with its final bytes.
+type errAfterRecordConn struct {
+	net.Conn
+	armed  int32
+	staged []byte
+}
+
+func (e *errAfterRecordConn) Read(b []byte) (int, error) {
+	if len(e.staged) == 0 {
+		if atomic.LoadInt32(&e.armed) == 0 {
+			return e.Conn.Read(b)
+		}
+		hdr := make([]byte, 5)
+		if _, err := io.ReadFull(e.Conn, hdr); err != nil {
+			return 0, err
+		}
+		body := make([]byte, int(hdr[3])<<8|int(hdr[4]))
+		if _, err := io.ReadFull(e.Conn, body); err != nil {
+			return 0, err
+		}
+		e.staged = append(hdr, body...)
+		atomic.StoreInt32(&e.armed, 0)
+	}
+	n := copy(b, e.staged)
+	e.staged = e.staged[n:]
+	if len(e.staged) == 0 {
+		return n, errAfterData
+	}
+	return n, nil
+}
+
+func TestReadErrorComesFromCurrentCall(t *testing.T) {
+	var ec *errAfterRecordConn
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &errAfterRecordConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+
+	// Drain post-handshake messages so the armed record is the application data.
+	buf := make([]byte, 3)
+	if _, err := srv.Write([]byte("one")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	if _, err := io.ReadFull(cli, buf); err != nil || string(buf) != "one" {
+		t.Fatalf("client read %q: %v", buf, err)
+	}
+
+	atomic.StoreInt32(&ec.armed, 1)
+	if _, err := srv.Write([]byte("two")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	n, err := cli.Read(buf)
+	if err != nil || string(buf[:n]) != "two" {
+		t.Fatalf("Read of data delivered with an error: %q, %v", buf[:n], err)
+	}
+	if _, err := cli.Read(buf); !errors.Is(err, errAfterData) {
+		t.Fatalf("next Read: got %v, want the transport error returned with the data", err)
 	}
 }

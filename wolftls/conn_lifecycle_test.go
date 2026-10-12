@@ -1016,3 +1016,67 @@ func TestHandshakeContextCancelRacingClose(t *testing.T) {
 		t.Fatal("handshake succeeded with a canceled context")
 	}
 }
+
+func TestHandshakeContextCancelWithoutDeadlines(t *testing.T) {
+	cConn, sConn := lifecycleTCPPair(t)
+	defer sConn.Close()
+	cli := Client(deadlineFreeConn{cConn}, silentServerClientConfig())
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- cli.HandshakeContext(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("handshake succeeded against a silent server")
+		}
+	case <-time.After(lifecycleTimeout):
+		cConn.Close()
+		t.Fatal("HandshakeContext ignored cancellation on a transport without deadlines")
+	}
+}
+
+func TestHandshakeContextCanceledAfterHandshake(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		return deadlineFreeConn{c}
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := cli.HandshakeContext(ctx); err != nil {
+		t.Fatalf("HandshakeContext on an established conn: %v", err)
+	}
+	if _, err := cli.Write([]byte("ping")); err != nil {
+		t.Fatalf("write after HandshakeContext: %v", err)
+	}
+	got := make([]byte, 4)
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(srv, got); err != nil || string(got) != "ping" {
+		t.Fatalf("server read %q: %v", got, err)
+	}
+}
+
+func TestHandshakeAbortedByCancelNotReportedAsSuccess(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+
+	atomic.StoreInt32(&cli.handshakeState, hsAborted)
+	if err := cli.Handshake(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("handshake after cancel closed the transport: got %v, want net.ErrClosed", err)
+	}
+	cli.mu.RLock()
+	leaked := cli.ssl != nil || cli.ctx != nil || cli.ioConnID != 0
+	cli.mu.RUnlock()
+	if leaked {
+		t.Fatal("wolfSSL session not released after an aborted handshake")
+	}
+}

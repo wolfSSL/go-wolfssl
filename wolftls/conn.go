@@ -33,6 +33,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
@@ -186,6 +187,12 @@ func (r *recordingConn) takeLastReadErr() error {
 	return err
 }
 
+const (
+	hsPending  = 0
+	hsFinished = 1
+	hsAborted  = 2 // a canceled HandshakeContext closed the transport
+)
+
 // Conn is a TLS connection backed by wolfSSL. It implements net.Conn.
 type Conn struct {
 	conn     net.Conn
@@ -196,6 +203,9 @@ type Conn struct {
 	handshakeMu   sync.Mutex
 	handshakeDone bool
 	handshakeErr  error
+	// handshakeState arbitrates between handshake completion and a
+	// HandshakeContext cancel that closes the transport; see hs* below.
+	handshakeState int32
 
 	// mu protects c.ssl and c.ctx for callers that may run concurrently
 	// with Close (e.g. http.Hijacker handing the conn to a DERP handler
@@ -261,6 +271,10 @@ func (c *Conn) Handshake() error {
 
 	c.handshakeErr = c.doHandshake()
 	c.handshakeDone = true
+	if !atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsFinished) && c.handshakeErr == nil {
+		c.cleanup()
+		c.handshakeErr = net.ErrClosed
+	}
 	return c.handshakeErr
 }
 
@@ -268,6 +282,9 @@ func (c *Conn) Handshake() error {
 // If the context is canceled before the handshake completes, a past deadline
 // is set on the underlying connection to unblock the wolfSSL handshake call.
 func (c *Conn) HandshakeContext(ctx context.Context) error {
+	if atomic.LoadInt32(&c.handshakeState) != hsPending {
+		return c.Handshake()
+	}
 	done := make(chan struct{})
 	var err error
 	go func() {
@@ -279,13 +296,22 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 	case <-done:
 		return err
 	case <-ctx.Done():
+		select {
+		case <-done:
+			return err
+		default:
+		}
 		c.mu.RLock()
 		conn := c.conn
 		c.mu.RUnlock()
 		// Set an expired deadline to unblock the blocking wolfSSL call
 		// without closing the conn out from under the handshake goroutine.
+		// A transport without deadline support has to be closed instead.
 		if conn != nil {
-			conn.SetDeadline(time.Unix(1, 0))
+			if conn.SetDeadline(time.Unix(1, 0)) != nil &&
+				atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsAborted) {
+				conn.Close()
+			}
 		}
 		<-done // wait for Handshake goroutine to finish
 		// Restore deadline so the caller can still close cleanly.
@@ -877,6 +903,7 @@ func (c *Conn) Close() error {
 	if !c.handshakeDone {
 		c.handshakeDone = true
 		c.handshakeErr = net.ErrClosed
+		atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsFinished)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

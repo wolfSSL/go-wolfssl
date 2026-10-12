@@ -192,12 +192,18 @@ func WolfSSL_X509_STORE_add_cert(store *C.WOLFSSL_X509_STORE, x509 *C.WOLFSSL_X5
 }
 
 func WolfSSL_X509_STORE_load_locations(store *C.WOLFSSL_X509_STORE, capath string) int {
+	if wrapperStringHasNUL(capath) {
+		return BAD_FUNC_ARG
+	}
 	cStr := C.CString(capath)
 	defer C.free(unsafe.Pointer(cStr))
 	return int(C.X509_STORE_load_locations(store, nil, cStr))
 }
 
 func WolfSSL_X509_STORE_load_file(store *C.WOLFSSL_X509_STORE, cafile string) int {
+	if wrapperStringHasNUL(cafile) {
+		return BAD_FUNC_ARG
+	}
 	cStr := C.CString(cafile)
 	defer C.free(unsafe.Pointer(cStr))
 	return int(C.X509_STORE_load_locations(store, cStr, nil))

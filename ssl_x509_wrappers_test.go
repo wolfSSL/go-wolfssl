@@ -415,3 +415,20 @@ func TestDTLSSetPeerRejectsNegativeSize(t *testing.T) {
         t.Fatalf("dtls_set_peer(-1) = %d, want BAD_FUNC_ARG", ret)
     }
 }
+
+func TestX509StoreLoadersRejectEmbeddedNUL(t *testing.T) {
+    store := WolfSSL_X509_STORE_new()
+    if store == nil {
+        t.Skip("wolfSSL built without X509_STORE")
+    }
+    defer WolfSSL_X509_STORE_free(store)
+    if ret := WolfSSL_X509_STORE_load_file(store, testCertDir+"ca-cert.pem\x00.bak"); ret != BAD_FUNC_ARG {
+        t.Errorf("X509_STORE_load_file with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_X509_STORE_load_locations(store, testCertDir+"\x00x"); ret != BAD_FUNC_ARG {
+        t.Errorf("X509_STORE_load_locations with NUL = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_X509_STORE_load_file(store, testCertDir+"ca-cert.pem"); ret != WOLFSSL_SUCCESS {
+        t.Errorf("X509_STORE_load_file = %d", ret)
+    }
+}

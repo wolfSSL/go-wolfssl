@@ -309,3 +309,33 @@ func TestHmacFinalShortOutput(t *testing.T) {
 		t.Fatalf("full out: %d", ret)
 	}
 }
+
+func TestChaChaPolyRejectsWrongKeyAndIvLength(t *testing.T) {
+	key := make([]byte, 32)
+	iv := make([]byte, 12)
+	plain := []byte("plaintext")
+	ct := make([]byte, len(plain))
+	tag := make([]byte, 16)
+	ret := Wc_ChaCha20Poly1305_Encrypt(key, iv, nil, plain, ct, tag)
+	if ret == notCompiledE {
+		t.Skip("ChaCha20-Poly1305 not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_ChaCha20Poly1305_Encrypt: %d", ret)
+	}
+	longKey := make([]byte, CHACHA20_POLY1305_AEAD_KEYSIZE+1)
+	longIv := make([]byte, CHACHA20_POLY1305_AEAD_IV_SIZE+1)
+	if ret := Wc_ChaCha20Poly1305_Encrypt(longKey, iv, nil, plain, ct, tag); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt long key: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_ChaCha20Poly1305_Encrypt(key, longIv, nil, plain, ct, tag); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt long iv: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	out := make([]byte, len(plain))
+	if ret := Wc_ChaCha20Poly1305_Decrypt(longKey, iv, nil, ct, tag, out); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt long key: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_ChaCha20Poly1305_Decrypt(key, longIv, nil, ct, tag, out); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt long iv: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

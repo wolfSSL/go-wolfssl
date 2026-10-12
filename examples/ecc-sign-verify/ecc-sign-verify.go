@@ -101,7 +101,11 @@ func main() {
 
     /* Create sha512 hash of the test string */
     hash = make([]byte, wolfSSL.WC_SHA512_DIGEST_SIZE)
-    wolfSSL.Wc_Sha512Hash(str, len(str), hash)
+    ret := wolfSSL.Wc_Sha512Hash(str, len(str), hash)
+    if ret != 0 {
+        fmt.Println("Failed to hash test string", ret)
+        os.Exit(1)
+    }
 
     /* Test sign/verify for the NIST P-256, P-384 and P-521 key sizes in bits */
     sign_verify(256, hash, printSig)

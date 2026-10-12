@@ -101,6 +101,10 @@ func main() {
 
     /* Retrieve file descriptor from net.*TCPConn type */
     file,err := conn.File()
+    if err != nil {
+        fmt.Println("Error getting file descriptor: ", err.Error())
+        os.Exit(1)
+    }
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 

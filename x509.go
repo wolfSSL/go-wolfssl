@@ -299,6 +299,9 @@ func WolfSSL_BIO_free(bio *WOLFSSL_BIO) int {
 }
 
 func WolfSSL_i2d_X509(x509 *WOLFSSL_X509, out *[]byte) int {
+	if out == nil {
+		return int(C.wolfSSL_i2d_X509((*C.struct_WOLFSSL_X509)(x509), nil))
+	}
 	var outPtr *C.uchar
 	result := int(C.wolfSSL_i2d_X509((*C.struct_WOLFSSL_X509)(x509), &outPtr))
 	if result > 0 && outPtr != nil {

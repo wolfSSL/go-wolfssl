@@ -504,3 +504,13 @@ func TestChainAccessorsRejectOutOfRangeIndex(t *testing.T) {
         t.Error("in-range index returned no certificate")
     }
 }
+
+func TestI2dX509NilOutputReturnsLength(t *testing.T) {
+    der := readTestCertDER(t, "ca-cert.pem")
+    requireOpenSSLExtra(t, der)
+    x := WolfSSL_X509_load_certificate_buffer(der, len(der), SSL_FILETYPE_ASN1)
+    defer WolfSSL_X509_free(x)
+    if n := WolfSSL_i2d_X509(x, nil); n != len(der) {
+        t.Fatalf("i2d_X509 with nil output = %d, want %d", n, len(der))
+    }
+}

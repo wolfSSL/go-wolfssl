@@ -67,7 +67,7 @@ func Wc_InitBlake2s_WithKey(blake2s *C.struct_Blake2s, digestSz int, key []byte)
 }
 
 func Wc_Blake2sUpdate(blake2s *C.struct_Blake2s, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(in) > 0 {
         sanIn = (*C.uchar)(unsafe.Pointer(&in[0]))

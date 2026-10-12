@@ -598,3 +598,17 @@ func TestSha256UpdateRejectsOversizedLength(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestBlake2sUpdateRejectsOversizedLength(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	b2s := new(Blake2s)
+	if ret := Wc_InitBlake2s(b2s, WC_BLAKE2S_256_DIGEST_SIZE); ret == notCompiledE {
+		t.Skip("BLAKE2s not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_InitBlake2s: %d", ret)
+	}
+	if ret := Wc_Blake2sUpdate(b2s, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

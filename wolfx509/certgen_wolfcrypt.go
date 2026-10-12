@@ -128,7 +128,7 @@ func sigTypeFor(alg handles.Algorithm) (int, error) {
 // ignored by CSR generation (CSRs don't carry validity) and required otherwise.
 type certBuildOpts struct {
 	SubjectCN      string    // CommonName; error if >= CTC_NAME_SIZE bytes or contains NUL
-	Serial         []byte    // up to 20 bytes; ignored for CSRs, generated if empty
+	Serial         []byte    // up to CTC_SERIAL_SIZE bytes; ignored for CSRs, generated if empty
 	NotBefore      time.Time // Date marking the start of validity
 	NotAfter       time.Time // Date marking the end of validity
 	IsCA           bool      // BasicConstraints CA:TRUE

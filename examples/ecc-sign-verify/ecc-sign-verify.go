@@ -103,13 +103,9 @@ func main() {
     hash = make([]byte, wolfSSL.WC_SHA512_DIGEST_SIZE)
     wolfSSL.Wc_Sha512Hash(str, len(str), hash)
 
-    /* Test sign/verify for different key sizes */
-    sign_verify(48,  hash, printSig)
-    sign_verify(112, hash, printSig)
-    sign_verify(128, hash, printSig)
-    sign_verify(192, hash, printSig)
+    /* Test sign/verify for the NIST P-256, P-384 and P-521 key sizes in bits */
     sign_verify(256, hash, printSig)
-    sign_verify(320, hash, printSig)
     sign_verify(384, hash, printSig)
+    sign_verify(521, hash, printSig)
 
 }

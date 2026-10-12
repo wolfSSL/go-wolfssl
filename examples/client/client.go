@@ -104,10 +104,10 @@ func main() {
     /* Recieve then print the message from server */
     buf := make([]byte, 256)
     ret = wolfSSL.WolfSSL_read(ssl, buf, 256)
-    if ret < 0 {
+    if ret <= 0 {
         fmt.Println(" wolfSSL_read failed ");
     } else {
-        fmt.Println("Server says : ", string(buf));
+        fmt.Println("Server says : ", string(buf[:ret]));
     }
 
     /* Shutdown wolfSSL */

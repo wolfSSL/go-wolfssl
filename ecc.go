@@ -25,6 +25,7 @@ package wolfSSL
 // #include <wolfssl/wolfcrypt/ecc.h>
 // #include <wolfssl/wolfcrypt/asn_public.h>
 // #include <wolfssl/wolfcrypt/random.h>
+// #include <wolfssl/wolfcrypt/error-crypt.h>
 // #ifndef HAVE_ECC
 // #define ECC_MAX_SIG_SIZE 1
 // #define ECC_SECP256R1 1
@@ -109,6 +110,9 @@ package wolfSSL
 //     mp_int order;
 //     int ret;
 //     mp_int* priv;
+//     if (key == NULL || key->dp == NULL ||
+//         (key->type != ECC_PRIVATEKEY && key->type != ECC_PRIVATEKEY_ONLY))
+//         return BAD_FUNC_ARG;
 // #ifdef WOLFSSL_HAVE_ECC_KEY_GET_PRIV
 //     priv = wc_ecc_key_get_priv(key);
 // #else

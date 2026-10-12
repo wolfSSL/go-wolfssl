@@ -359,7 +359,13 @@ func WolfSSL_d2i_ASN1_OBJECT(a **WOLFSSL_ASN1_OBJECT, der *[]byte, length int) *
 
 	if result != nil {
 		offset := uintptr(unsafe.Pointer(cDerPtr)) - uintptr(unsafe.Pointer(cStart))
-		if offset > uintptr(len(*der)) { return nil }
+		if offset > uintptr(len(*der)) {
+			if a != nil && *a == result {
+				*a = nil
+			}
+			C.wolfSSL_ASN1_OBJECT_free((*C.struct_WOLFSSL_ASN1_OBJECT)(result))
+			return nil
+		}
 		*der = (*der)[offset:]
 	}
 

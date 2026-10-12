@@ -174,6 +174,7 @@ func Wc_AesFree(aes *C.struct_Aes) {
 func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int) int {
     if length < 0 || length > len(key) { return BAD_FUNC_ARG }
     if len(key) == 0 { return BAD_FUNC_ARG }
+    if len(iv) != 0 && len(iv) < AES_IV_SIZE { return BAD_FUNC_ARG }
     var ivPtr *C.uchar
     if len(iv) > 0 {
         ivPtr = (*C.uchar)(unsafe.Pointer(&iv[0]))

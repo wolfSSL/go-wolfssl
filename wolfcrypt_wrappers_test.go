@@ -713,3 +713,28 @@ func TestChaChaPolyRejectsOversizedLengths(t *testing.T) {
 		t.Fatalf("decrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestAesSetKeyRejectsShortIv(t *testing.T) {
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_AesInit: %d", ret)
+	}
+	defer Wc_AesFree(aes)
+	key := make([]byte, AES_128_KEY_SIZE)
+	iv := make([]byte, AES_IV_SIZE)
+	if ret := Wc_AesSetKey(aes, key, len(key), iv, AES_ENCRYPTION); ret == notCompiledE {
+		t.Skip("AES not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesSetKey: %d", ret)
+	}
+	if ret := Wc_AesSetKey(aes, key, len(key), nil, AES_ENCRYPTION); ret != 0 {
+		t.Fatalf("Wc_AesSetKey without iv: %d", ret)
+	}
+	if ret := Wc_AesSetKey(aes, key, len(key), iv[:AES_IV_SIZE/2], AES_ENCRYPTION); ret != BAD_FUNC_ARG {
+		t.Fatalf("short iv: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

@@ -389,6 +389,9 @@ func WolfSSL_ASN1_OBJECT_free(obj *WOLFSSL_ASN1_OBJECT) {
 }
 
 func WolfSSL_OBJ_txt2obj(s string, noName int) *WOLFSSL_ASN1_OBJECT {
+	if wrapperStringHasNUL(s) {
+		return nil
+	}
 	cStr := C.CString(s)
 	defer C.free(unsafe.Pointer(cStr))
 	return (*WOLFSSL_ASN1_OBJECT)(C.wolfSSL_OBJ_txt2obj(cStr, C.int(noName)))

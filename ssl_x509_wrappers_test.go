@@ -432,3 +432,15 @@ func TestX509StoreLoadersRejectEmbeddedNUL(t *testing.T) {
         t.Errorf("X509_STORE_load_file = %d", ret)
     }
 }
+
+func TestOBJTxt2objRejectsEmbeddedNUL(t *testing.T) {
+    obj := WolfSSL_OBJ_txt2obj("2.5.4.3", 1)
+    if obj == nil {
+        t.Skip("wolfSSL_OBJ_txt2obj not available")
+    }
+    WolfSSL_ASN1_OBJECT_free(obj)
+    if obj := WolfSSL_OBJ_txt2obj("2.5.4.3\x00.99", 1); obj != nil {
+        WolfSSL_ASN1_OBJECT_free(obj)
+        t.Fatal("OBJ_txt2obj accepted text containing NUL")
+    }
+}

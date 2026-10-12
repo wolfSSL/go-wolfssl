@@ -100,8 +100,11 @@ func main() {
 	}
 	defer wolfSSL.WolfSSL_sk_X509_free(inter)
 
-	wolfSSL.WolfSSL_sk_X509_push(inter, x509Int1)
-	wolfSSL.WolfSSL_sk_X509_push(inter, x509Int2)
+	if wolfSSL.WolfSSL_sk_X509_push(inter, x509Int1) <= 0 ||
+		wolfSSL.WolfSSL_sk_X509_push(inter, x509Int2) <= 0 {
+		fmt.Fprintln(os.Stderr, "Failed to add intermediate certs to stack")
+		os.Exit(1)
+	}
 
 	// Setup store context
 	ctx := wolfSSL.WolfSSL_X509_STORE_CTX_new()

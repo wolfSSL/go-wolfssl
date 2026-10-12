@@ -799,3 +799,22 @@ func TestCreateCertificateKeyUsageDecipherOnly(t *testing.T) {
 		t.Errorf("KeyUsage = %#x, want %#x", got, want)
 	}
 }
+
+func TestCreateCertificateRejectsUnknownExtKeyUsage(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	tmpl := &Certificate{
+		SerialNumber:       big.NewInt(1),
+		Subject:            Name{CommonName: "custom-eku"},
+		NotBefore:          time.Now().Add(-time.Hour),
+		NotAfter:           time.Now().Add(24 * time.Hour),
+		UnknownExtKeyUsage: []asn1.ObjectIdentifier{{1, 3, 6, 1, 4, 1, 99999, 1}},
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); !errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Errorf("UnknownExtKeyUsage: err = %v, want ErrUnsupportedCreateMode", err)
+	}
+}

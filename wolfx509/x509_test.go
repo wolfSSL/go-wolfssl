@@ -21,13 +21,23 @@
 package wolfx509
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
+	"math/big"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // loadPEM reads a PEM file and returns the DER bytes of the first CERTIFICATE block.
@@ -324,5 +334,260 @@ func TestConcurrentParse(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("concurrent parse: %v", err)
+	}
+}
+
+func TestParseCertificateExtensionsMatchStdlib(t *testing.T) {
+	ders := map[string][]byte{}
+	for _, f := range []string{"server-cert.pem", "client-int-cert.pem", "ca-int-cert.pem"} {
+		ders[f] = loadPEM(t, filepath.Join(certsDir(t), f))
+	}
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	tmpl := &Certificate{
+		SerialNumber:          big.NewInt(9),
+		Subject:               Name{CommonName: "ext.example"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		DNSNames:              []string{"a.example", "b.example"},
+		EmailAddresses:        []string{"x@example.com"},
+		IPAddresses:           []net.IP{net.IPv4(10, 0, 0, 1), net.ParseIP("2001:db8::1")},
+		BasicConstraintsValid: true,
+		KeyUsage:              KeyUsageDigitalSignature | KeyUsageKeyAgreement,
+		ExtKeyUsage:           []ExtKeyUsage{ExtKeyUsageServerAuth, ExtKeyUsageCodeSigning},
+	}
+	if ders["generated"], err = CreateCertificate(tmpl, tmpl, k, k); err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+
+	for name, der := range ders {
+		c, err := ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("%s: ParseCertificate: %v", name, err)
+		}
+		defer c.Free()
+		s, err := stdlibParseCert(der)
+		if err != nil {
+			t.Fatalf("%s: stdlib parse: %v", name, err)
+		}
+		if c.BasicConstraintsValid != s.BasicConstraintsValid || c.IsCA != s.IsCA {
+			t.Errorf("%s: BasicConstraintsValid/IsCA = %v/%v, want %v/%v", name,
+				c.BasicConstraintsValid, c.IsCA, s.BasicConstraintsValid, s.IsCA)
+		}
+		if c.KeyUsage != KeyUsage(s.KeyUsage) {
+			t.Errorf("%s: KeyUsage = %#x, want %#x", name, c.KeyUsage, s.KeyUsage)
+		}
+		var wantEKU []ExtKeyUsage
+		for _, u := range s.ExtKeyUsage {
+			wantEKU = append(wantEKU, ExtKeyUsage(u))
+		}
+		if !sameEKUs(c.ExtKeyUsage, wantEKU) {
+			t.Errorf("%s: ExtKeyUsage = %v, want %v", name, c.ExtKeyUsage, wantEKU)
+		}
+		if strings.Join(c.DNSNames, ",") != strings.Join(s.DNSNames, ",") {
+			t.Errorf("%s: DNSNames = %q, want %q", name, c.DNSNames, s.DNSNames)
+		}
+		if strings.Join(c.EmailAddresses, ",") != strings.Join(s.EmailAddresses, ",") {
+			t.Errorf("%s: EmailAddresses = %q, want %q", name, c.EmailAddresses, s.EmailAddresses)
+		}
+		if len(c.IPAddresses) != len(s.IPAddresses) {
+			t.Errorf("%s: IPAddresses = %v, want %v", name, c.IPAddresses, s.IPAddresses)
+		} else {
+			for i := range s.IPAddresses {
+				if !c.IPAddresses[i].Equal(s.IPAddresses[i]) {
+					t.Errorf("%s: IPAddresses = %v, want %v", name, c.IPAddresses, s.IPAddresses)
+					break
+				}
+			}
+		}
+	}
+}
+
+func sameEKUs(a, b []ExtKeyUsage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[ExtKeyUsage]int{}
+	for _, u := range a {
+		seen[u]++
+	}
+	for _, u := range b {
+		if seen[u] == 0 {
+			return false
+		}
+		seen[u]--
+	}
+	return true
+}
+
+func TestParseCertificateExtKeyUsageAllPurposes(t *testing.T) {
+	unknown := []asn1.ObjectIdentifier{{1, 3, 6, 1, 4, 1, 99999, 1}}
+	der, err := stdlibCertWithEKUs(unknown)
+	if err != nil {
+		t.Fatalf("stdlibCertWithEKUs: %v", err)
+	}
+	c, err := ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	defer c.Free()
+	s, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib parse: %v", err)
+	}
+	if len(c.ExtKeyUsage) != len(s.ExtKeyUsage) {
+		t.Fatalf("ExtKeyUsage = %v, want %v", c.ExtKeyUsage, s.ExtKeyUsage)
+	}
+	for i := range s.ExtKeyUsage {
+		if c.ExtKeyUsage[i] != ExtKeyUsage(s.ExtKeyUsage[i]) {
+			t.Fatalf("ExtKeyUsage = %v, want %v", c.ExtKeyUsage, s.ExtKeyUsage)
+		}
+	}
+	if len(c.UnknownExtKeyUsage) != 1 || !c.UnknownExtKeyUsage[0].Equal(unknown[0]) {
+		t.Errorf("UnknownExtKeyUsage = %v, want %v", c.UnknownExtKeyUsage, unknown)
+	}
+}
+
+func TestParseCertificateSANTypesAndOrder(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse("https://uri.example/path")
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(1),
+		Subject:        pkix.Name{CommonName: "order"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(time.Hour),
+		DNSNames:       []string{"d1.example", "d2.example"},
+		EmailAddresses: []string{"a@example.com", "b@example.com", "c@example.com"},
+		IPAddresses:    []net.IP{net.IPv4(10, 0, 0, 1), net.ParseIP("2001:db8::1")},
+		URIs:           []*url.URL{u},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := stdlibCertWithExtension(asn1.ObjectIdentifier{2, 5, 29, 17}, mustSAN(t,
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: []byte{0x06, 0x03, 0x2a, 0x03, 0x04, 0xa0, 0x05, 0x0c, 0x03, 'x', 'y', 'z'}},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte("keep.example")},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 8, Bytes: []byte{0x2a, 0x03, 0x04}},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 4, IsCompound: true, Bytes: []byte{0x30, 0x0e, 0x31, 0x0c, 0x30, 0x0a, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x03, 'x', 'y', 'z'}},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte("https://u.example/")},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 1, Bytes: []byte("only@example.com")},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emailOnly, err := stdlibCertWithExtension(asn1.ObjectIdentifier{2, 5, 29, 17}, mustSAN(t,
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 1, Bytes: []byte("first@example.com")},
+		asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 1, Bytes: []byte("second@example.com")},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string][]byte{"mixed": der, "otherName+rid": other, "email only": emailOnly} {
+		c, err := ParseCertificate(d)
+		if err != nil {
+			t.Fatalf("%s: ParseCertificate: %v", name, err)
+		}
+		s, _ := stdlibParseCert(d)
+		if strings.Join(c.DNSNames, ",") != strings.Join(s.DNSNames, ",") ||
+			strings.Join(c.EmailAddresses, ",") != strings.Join(s.EmailAddresses, ",") {
+			t.Errorf("%s: DNS/email = %q %q, want %q %q", name, c.DNSNames, c.EmailAddresses, s.DNSNames, s.EmailAddresses)
+		}
+		c.Free()
+	}
+}
+
+func mustSAN(t *testing.T, gns ...asn1.RawValue) []byte {
+	t.Helper()
+	b, err := asn1.Marshal(gns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestCreateCertificateRejectsUnencodableExtKeyUsage(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	for _, u := range []ExtKeyUsage{ExtKeyUsageIPSECEndSystem, ExtKeyUsageIPSECTunnel, ExtKeyUsageIPSECUser, ExtKeyUsage(99)} {
+		tmpl := &Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      Name{CommonName: "eku"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			ExtKeyUsage:  []ExtKeyUsage{u},
+		}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); !errors.Is(err, ErrUnsupportedCreateMode) {
+			t.Errorf("ExtKeyUsage %d: err = %v, want ErrUnsupportedCreateMode", u, err)
+		}
+	}
+}
+
+func TestParseCertificateRejectsEmptyExtKeyUsage(t *testing.T) {
+	der, err := stdlibCertWithExtension(asn1.ObjectIdentifier{2, 5, 29, 37}, []byte{0x30, 0x00})
+	if err != nil {
+		t.Fatalf("stdlibCertWithExtension: %v", err)
+	}
+	if c, err := ParseCertificate(der); err == nil {
+		t.Errorf("ParseCertificate accepted an empty extKeyUsage, ExtKeyUsage=%v", c.ExtKeyUsage)
+		c.Free()
+	}
+}
+
+func TestParseCertificateRejectsMalformedExtKeyUsage(t *testing.T) {
+	oidEKU := asn1.ObjectIdentifier{2, 5, 29, 37}
+	serverAuth := []byte{0x30, 0x0a, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01}
+	for name, exts := range map[string][]pkix.Extension{
+		"wrong outer tag":   {{Id: oidEKU, Value: []byte{0x31, 0x03, 0x06, 0x01, 0x2b}}},
+		"truncated":         {{Id: oidEKU, Value: serverAuth[:len(serverAuth)-2]}},
+		"trailing data":     {{Id: oidEKU, Value: append(append([]byte(nil), serverAuth...), 0x00, 0x00)}},
+		"non-OID element":   {{Id: oidEKU, Value: []byte{0x30, 0x03, 0x02, 0x01, 0x01}}},
+		"duplicate EKU ext": {{Id: oidEKU, Value: serverAuth}, {Id: oidEKU, Value: serverAuth}},
+	} {
+		der, err := stdlibCertWithExtensions(exts...)
+		if err != nil {
+			t.Fatalf("%s: stdlibCertWithExtensions: %v", name, err)
+		}
+		if c, err := ParseCertificate(der); err == nil {
+			t.Errorf("%s: ParseCertificate accepted it, ExtKeyUsage=%v", name, c.ExtKeyUsage)
+			c.Free()
+		} else if !errors.Is(err, ErrInvalidCert) {
+			t.Errorf("%s: err = %v, want ErrInvalidCert", name, err)
+		}
+	}
+}
+
+func TestParseCertificateRejectsMalformedSANs(t *testing.T) {
+	oidSAN := asn1.ObjectIdentifier{2, 5, 29, 17}
+	for name, gn := range map[string]asn1.RawValue{
+		"dNSName with NUL":      {Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte("good.example\x00evil.example")},
+		"non-ASCII rfc822Name":  {Class: asn1.ClassContextSpecific, Tag: 1, Bytes: []byte("us\xc3\xa9r@example.com")},
+		"empty dNSName":         {Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte{}},
+		"empty rfc822Name":      {Class: asn1.ClassContextSpecific, Tag: 1, Bytes: []byte{}},
+		"5-byte iPAddress":      {Class: asn1.ClassContextSpecific, Tag: 7, Bytes: []byte{10, 0, 0, 1, 0}},
+		"IPv4-mapped iPAddress": {Class: asn1.ClassContextSpecific, Tag: 7, Bytes: net.ParseIP("::ffff:192.0.2.1").To16()},
+	} {
+		value, err := asn1.Marshal([]asn1.RawValue{gn})
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		der, err := stdlibCertWithExtension(oidSAN, value)
+		if err != nil {
+			t.Fatalf("%s: stdlibCertWithExtension: %v", name, err)
+		}
+		if c, err := ParseCertificate(der); err == nil {
+			t.Errorf("%s: ParseCertificate accepted it, DNSNames=%q EmailAddresses=%q IPAddresses=%v",
+				name, c.DNSNames, c.EmailAddresses, c.IPAddresses)
+			c.Free()
+		}
 	}
 }

@@ -64,6 +64,14 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 	if template.KeyUsage&KeyUsageDecipherOnly != 0 && template.KeyUsage&KeyUsageKeyAgreement == 0 {
 		return nil, errors.New("wolfx509: KeyUsageDecipherOnly requires KeyUsageKeyAgreement")
 	}
+	if len(template.UnknownExtKeyUsage) > 0 {
+		return nil, fmt.Errorf("%w: UnknownExtKeyUsage cannot be encoded", ErrUnsupportedCreateMode)
+	}
+	for _, u := range template.ExtKeyUsage {
+		if !extKeyUsageEncodable(u) {
+			return nil, fmt.Errorf("%w: ExtKeyUsage %d cannot be encoded", ErrUnsupportedCreateMode, int(u))
+		}
+	}
 
 	notBefore, notAfter, err := resolveValidity(template.NotBefore,
 		template.NotAfter, template.ValidDays)
@@ -297,6 +305,17 @@ func translateKeyUsage(k KeyUsage) int {
 		out |= wcKeyUsageDecipherOnly
 	}
 	return out
+}
+
+// extKeyUsageEncodable reports whether translateExtKeyUsage can encode u.
+func extKeyUsageEncodable(u ExtKeyUsage) bool {
+	switch u {
+	case ExtKeyUsageAny, ExtKeyUsageServerAuth, ExtKeyUsageClientAuth,
+		ExtKeyUsageCodeSigning, ExtKeyUsageEmailProtection,
+		ExtKeyUsageTimeStamping, ExtKeyUsageOCSPSigning:
+		return true
+	}
+	return false
 }
 
 // translateExtKeyUsage folds a slice of crypto/x509-shaped ExtKeyUsage

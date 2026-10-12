@@ -22,6 +22,7 @@ package wolfx509
 
 import (
 	"bytes"
+	"encoding/asn1"
 	"fmt"
 	"math/big"
 	"net"
@@ -36,6 +37,7 @@ import (
 
 // Certificate is a parsed X.509 certificate. Fields are populated in
 // Go memory at parse time so reads are safe without holding any lock.
+// RawSubject and RawIssuer are not populated by ParseCertificate.
 // The underlying wolfSSL *WOLFSSL_X509 is retained for Verify and is
 // freed when Free is called or the Certificate is garbage-collected.
 type Certificate struct {
@@ -52,6 +54,7 @@ type Certificate struct {
 	IsCA                  bool
 	KeyUsage              KeyUsage
 	ExtKeyUsage           []ExtKeyUsage
+	UnknownExtKeyUsage    []asn1.ObjectIdentifier
 	EmailAddresses        []string
 	DNSNames              []string
 	IPAddresses           []net.IP
@@ -115,6 +118,10 @@ const (
 	ExtKeyUsageIPSECUser
 	ExtKeyUsageTimeStamping
 	ExtKeyUsageOCSPSigning
+	ExtKeyUsageMicrosoftServerGatedCrypto
+	ExtKeyUsageNetscapeServerGatedCrypto
+	ExtKeyUsageMicrosoftCommercialCodeSigning
+	ExtKeyUsageMicrosoftKernelCodeSigning
 )
 
 // ParseCertificate parses a DER-encoded X.509 certificate. Returns a
@@ -166,6 +173,11 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 	// and for CAs that omit the extension, in which case this stays nil
 	// and callers must fall back (e.g. expiry-based renewal).
 	c.AuthorityKeyId = wolfSSL.WolfSSL_X509_get_authority_key_id(x)
+
+	if err := parseExtensions(c, x); err != nil {
+		wolfSSL.WolfSSL_X509_free(x)
+		return nil, err
+	}
 
 	// RawSubject / RawIssuer: re-encode the names via i2d. wolfSSL exposes
 	// i2d_X509_NAME but it's not universally available in the OpenSSL-extra

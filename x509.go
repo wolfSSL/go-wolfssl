@@ -310,6 +310,9 @@ func WolfSSL_X509_up_ref(x509 *WOLFSSL_X509) int {
 }
 
 func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen int) int {
+	if in == nil || objLen == nil || tag == nil || cls == nil {
+		return -1
+	}
 	if len(*in) == 0 || inLen < 0 || inLen > len(*in) {
 		return -1
 	}
@@ -341,7 +344,7 @@ func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen 
 }
 
 func WolfSSL_d2i_ASN1_OBJECT(a **WOLFSSL_ASN1_OBJECT, der *[]byte, length int) *WOLFSSL_ASN1_OBJECT {
-	if len(*der) == 0 || length < 0 || length > len(*der) {
+	if der == nil || len(*der) == 0 || length < 0 || length > len(*der) {
 		return nil
 	}
 

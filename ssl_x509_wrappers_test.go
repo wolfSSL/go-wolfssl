@@ -325,3 +325,23 @@ func TestFileLoadersRejectEmbeddedNUL(t *testing.T) {
         t.Errorf("use_PrivateKey_file with NUL = %d, want BAD_FUNC_ARG", ret)
     }
 }
+
+func TestASN1WrappersRejectNilArguments(t *testing.T) {
+    var objLen, tag, cls int
+    if ret := WolfSSL_ASN1_get_object(nil, &objLen, &tag, &cls, 0); ret != -1 {
+        t.Errorf("ASN1_get_object(nil in) = %d, want -1", ret)
+    }
+    in := []byte{0x04, 0x01, 0xAA}
+    if ret := WolfSSL_ASN1_get_object(&in, nil, &tag, &cls, len(in)); ret != -1 {
+        t.Errorf("ASN1_get_object(nil objLen) = %d, want -1", ret)
+    }
+    if ret := WolfSSL_ASN1_get_object(&in, &objLen, nil, &cls, len(in)); ret != -1 {
+        t.Errorf("ASN1_get_object(nil tag) = %d, want -1", ret)
+    }
+    if ret := WolfSSL_ASN1_get_object(&in, &objLen, &tag, nil, len(in)); ret != -1 {
+        t.Errorf("ASN1_get_object(nil cls) = %d, want -1", ret)
+    }
+    if obj := WolfSSL_d2i_ASN1_OBJECT(nil, nil, 0); obj != nil {
+        t.Error("d2i_ASN1_OBJECT(nil der) returned an object")
+    }
+}

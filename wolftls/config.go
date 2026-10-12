@@ -63,7 +63,8 @@ type Certificate struct {
 	// KeyPEM is the PEM-encoded private key.
 	KeyPEM []byte
 
-	// CertDER is the DER-encoded certificate (alternative to PEM).
+	// CertDER is the DER-encoded certificate chain (alternative to PEM):
+	// CertDER[0] is the leaf, followed by intermediates in sending order.
 	CertDER [][]byte
 
 	// KeyDER is the DER-encoded private key (alternative to PEM).
@@ -179,6 +180,20 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &clone
+}
+
+// derChain concatenates CertDER in order so the leaf and its intermediates
+// load through wolfSSL's chain API. It returns nil, which wolfSSL rejects,
+// when any entry is empty, so a later certificate never becomes the leaf.
+func (cert *Certificate) derChain() []byte {
+	var out []byte
+	for _, der := range cert.CertDER {
+		if len(der) == 0 {
+			return nil
+		}
+		out = append(out, der...)
+	}
+	return out
 }
 
 func (cert Certificate) clone() Certificate {

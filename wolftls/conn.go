@@ -267,8 +267,9 @@ func (c *Conn) doHandshake() error {
 			}
 		}
 		if len(cert.CertDER) > 0 {
-			ret := wolfSSL.WolfSSL_CTX_use_certificate_buffer(c.ctx, cert.CertDER[0],
-				len(cert.CertDER[0]), wolfSSL.SSL_FILETYPE_ASN1)
+			chain := cert.derChain()
+			ret := wolfSSL.WolfSSL_CTX_use_certificate_chain_buffer_format(c.ctx, chain,
+				len(chain), wolfSSL.SSL_FILETYPE_ASN1)
 			if ret != wolfSSL.WOLFSSL_SUCCESS {
 				c.freeCtxLocked()
 				return fmt.Errorf("wolftls: failed to load DER certificate (%d)", ret)
@@ -329,8 +330,9 @@ func (c *Conn) doHandshake() error {
 				}
 			}
 			if len(cert.CertDER) > 0 {
-				ret := wolfSSL.WolfSSL_use_certificate_buffer(ssl, cert.CertDER[0],
-					len(cert.CertDER[0]), wolfSSL.SSL_FILETYPE_ASN1)
+				chain := cert.derChain()
+				ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, chain,
+					len(chain), wolfSSL.SSL_FILETYPE_ASN1)
 				if ret != wolfSSL.WOLFSSL_SUCCESS {
 					return 0
 				}

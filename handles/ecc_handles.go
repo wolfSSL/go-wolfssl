@@ -26,6 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
@@ -50,18 +53,18 @@ const (
 // GenerateP256Key, NewEmptyEccKey, or NewEmptyEccPubKey. Callers must
 // Free the key when done; freeing twice is safe.
 //
-// EccKey is NOT currently thread-safe for use across operations that
-// consume the embedded RNG (SignDigest, GenerateP256Key, and any wolfx509 cert
-// builder call that takes this key as the signer). Either serialize
-// callers or hand each goroutine its own EccKey. Read-only ops
-// (Verify, public-key export) are safe to call concurrently.
+// The helpers in this package lock the key for the duration of each
+// wolfCrypt call, so an EccKey may be shared between goroutines and Free
+// waits for in-flight operations. Code that uses Raw, Rng, CKeyPtr or
+// CRngPtr directly must hold Lock (or LockEccKeys) across that use.
 type EccKey struct {
+	mu     sync.Mutex
 	raw    wolfSSL.Ecc_key
 	rng    wolfSSL.WC_RNG
-	init   bool // wc_ecc_init has run
-	hasRng bool // wc_InitRng has run (private-key handles only)
-	live   bool // additionally, key material is populated
-	alg    Algorithm
+	init   bool  // wc_ecc_init has run
+	hasRng int32 // atomic; wc_InitRng has run (private-key handles only)
+	live   int32 // atomic; additionally, key material is populated
+	alg    int32 // atomic; the Algorithm while live
 }
 
 // GenerateP256Key returns a fresh P-256 (secp256r1) ECC key pair generated
@@ -100,7 +103,7 @@ func NewEmptyEccKey() (*EccKey, error) {
 		return nil, fmt.Errorf("wolfCrypt: wc_InitRng: %d", ret)
 	}
 	k.init = true
-	k.hasRng = true
+	atomic.StoreInt32(&k.hasRng, 1)
 	runtime.SetFinalizer(k, (*EccKey).Free)
 	return k, nil
 }
@@ -122,8 +125,14 @@ func NewEmptyEccPubKey() (*EccKey, error) {
 // or PEM blob. After MarkLive the key is usable for signing/verification.
 // MarkLive also records the key's curve for Algorithm.
 func (k *EccKey) MarkLive() {
-	k.alg, _ = eccKeyAlgorithm(&k.raw)
-	k.live = true
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.init {
+		return
+	}
+	alg, _ := eccKeyAlgorithm(&k.raw)
+	atomic.StoreInt32(&k.alg, int32(alg))
+	atomic.StoreInt32(&k.live, 1)
 }
 
 // p256SPKIPrefix is the DER SubjectPublicKeyInfo header for an uncompressed
@@ -159,42 +168,124 @@ func eccKeyAlgorithm(key *wolfSSL.Ecc_key) (Algorithm, int) {
 
 // IsLive reports whether the key has been generated or successfully parsed
 // (i.e. usable for signing/verification operations) and not yet freed.
-func (k *EccKey) IsLive() bool { return k != nil && k.live }
+// The result is stable only while Lock is held.
+func (k *EccKey) IsLive() bool {
+	return k != nil && atomic.LoadInt32(&k.live) == 1
+}
+
+// testHookAcquired, when set by tests, runs while an operation holds a key
+// lock.
+var testHookAcquired func()
+
+// acquire locks a live key and returns its unlock function, or returns nil
+// (with the key unlocked) if k is nil or not live.
+func (k *EccKey) acquire() func() {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	if atomic.LoadInt32(&k.live) == 0 {
+		k.mu.Unlock()
+		return nil
+	}
+	if testHookAcquired != nil {
+		testHookAcquired()
+	}
+	return k.mu.Unlock
+}
+
+// Lock serializes direct use of Raw, Rng, CKeyPtr and CRngPtr with the
+// helpers in this package and with Free. While holding it, do not call
+// MarkLive, Free or the package-level helpers on k; they lock k.
+func (k *EccKey) Lock() { k.mu.Lock() }
+
+// Unlock releases the lock taken by Lock.
+func (k *EccKey) Unlock() { k.mu.Unlock() }
+
+// LockEccKeys locks each distinct non-nil key in a fixed (address) order,
+// so callers locking overlapping sets cannot deadlock, and returns a
+// function that unlocks them.
+func LockEccKeys(keys ...*EccKey) (unlock func()) {
+	var locked []*EccKey
+	for _, k := range keys {
+		dup := k == nil
+		for _, l := range locked {
+			if l == k {
+				dup = true
+			}
+		}
+		if !dup {
+			locked = append(locked, k)
+		}
+	}
+	sort.Slice(locked, func(i, j int) bool {
+		return uintptr(unsafe.Pointer(locked[i])) < uintptr(unsafe.Pointer(locked[j]))
+	})
+	for _, k := range locked {
+		k.mu.Lock()
+	}
+	return func() {
+		for i := len(locked) - 1; i >= 0; i-- {
+			locked[i].mu.Unlock()
+		}
+	}
+}
 
 // Free releases the wolfCrypt key and RNG resources. Safe to call multiple
 // times and safe to call on a partially-constructed key (NewEmptyEccKey
 // or NewEmptyEccPubKey without MarkLive); subsequent calls are no-ops.
 func (k *EccKey) Free() {
-	if k == nil || !k.init {
+	if k == nil {
 		return
 	}
-	if k.hasRng {
-		wolfSSL.Wc_FreeRng(&k.rng)
-		k.hasRng = false
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.init {
+		return
 	}
+	if atomic.LoadInt32(&k.hasRng) == 1 {
+		wolfSSL.Wc_FreeRng(&k.rng)
+		atomic.StoreInt32(&k.hasRng, 0)
+	}
+	atomic.StoreInt32(&k.live, 0)
+	atomic.StoreInt32(&k.alg, int32(AlgUnknown))
 	wolfSSL.Wc_ecc_free(&k.raw)
 	k.init = false
-	k.live = false
 	// SetFinalizer to nil to avoid double-free
 	runtime.SetFinalizer(k, nil)
 }
 
 // Raw returns the underlying wolfCrypt ecc_key for direct use with low-level
 // Wc_* APIs (signing, verifying, cert builder, etc.). The returned pointer
-// is invalid after Free.
+// is invalid after Free; hold Lock while using it.
 func (k *EccKey) Raw() *wolfSSL.Ecc_key { return &k.raw }
 
 // Rng returns the wolfCrypt RNG associated with this key. Used by signing
-// operations that take an RNG argument.
+// operations that take an RNG argument. Hold Lock while using it.
 func (k *EccKey) Rng() *wolfSSL.WC_RNG { return &k.rng }
 
 // Algorithm returns AlgECDSAP256 for a live P-256 key and AlgUnknown for
 // any other curve or for a key that has not been marked live.
-func (k *EccKey) Algorithm() Algorithm    { return k.alg }
-func (k *EccKey) CKeyPtr() unsafe.Pointer { return unsafe.Pointer(&k.raw) }
+func (k *EccKey) Algorithm() Algorithm {
+	if !k.IsLive() {
+		return AlgUnknown
+	}
+	return Algorithm(atomic.LoadInt32(&k.alg))
+}
 
+// CKeyPtr returns the C ecc_key, or nil if k is not live. The caller must
+// hold Lock (or LockEccKeys) while calling it and using the pointer.
+func (k *EccKey) CKeyPtr() unsafe.Pointer {
+	if !k.IsLive() {
+		return nil
+	}
+	return unsafe.Pointer(&k.raw)
+}
+
+// CRngPtr returns the key's C WC_RNG, or nil if it has none. The caller
+// must hold Lock (or LockEccKeys) while calling it and using the pointer.
 func (k *EccKey) CRngPtr() unsafe.Pointer {
-	if k == nil || !k.hasRng {
+	if k == nil || atomic.LoadInt32(&k.hasRng) == 0 {
 		return nil
 	}
 	return unsafe.Pointer(&k.rng)
@@ -210,9 +301,11 @@ func (k *EccKey) CRngPtr() unsafe.Pointer {
 // MarshalSEC1DER returns the SEC1 EC-private-key DER encoding of k —
 // the body of an "EC PRIVATE KEY" PEM block.
 func MarshalSEC1DER(k *EccKey) ([]byte, error) {
-	if !k.IsLive() {
+	unlock := k.acquire()
+	if unlock == nil {
 		return nil, errors.New("handles: EccKey is not live")
 	}
+	defer unlock()
 	// 256 bytes comfortably exceeds the worst-case SEC1+pub size for any
 	// wolfCrypt-supported curve.
 	buf := make([]byte, 256)
@@ -226,9 +319,11 @@ func MarshalSEC1DER(k *EccKey) ([]byte, error) {
 // MarshalPKCS8DER returns the key wrapped in an unencrypted PKCS#8
 // PrivateKeyInfo DER blob via wc_EccKeyToPKCS8.
 func MarshalPKCS8DER(k *EccKey) ([]byte, error) {
-	if !k.IsLive() {
+	unlock := k.acquire()
+	if unlock == nil {
 		return nil, errors.New("handles: EccKey is not live")
 	}
+	defer unlock()
 	out := make([]byte, 384)
 	outLen := len(out)
 	if ret := wolfSSL.Wc_EccKeyToPKCS8(k.Raw(), out, &outLen); ret < 0 {
@@ -328,9 +423,11 @@ func ParseECPrivateKeyPEM(p []byte) (*EccKey, error) {
 // encoders (RFC 7518 §6.2.1) and anywhere else a pure numeric point
 // representation is needed.
 func PublicRawXY(k *EccKey) (x, y []byte, err error) {
-	if !k.IsLive() {
+	unlock := k.acquire()
+	if unlock == nil {
 		return nil, nil, errors.New("handles: EccKey is not live")
 	}
+	defer unlock()
 	x = make([]byte, 32)
 	y = make([]byte, 32)
 	xLen := len(x)
@@ -345,12 +442,13 @@ func PublicRawXY(k *EccKey) (x, y []byte, err error) {
 // encoded ECDSA signature (SEQUENCE { r INTEGER, s INTEGER }). For P-256,
 // the caller must supply a 32-byte digest (SHA-256 output).
 //
-// Not safe to call concurrently with another SignDigest (or any other
-// RNG-consuming operation) on the same EccKey: see the EccKey type doc.
+// Concurrent calls on the same EccKey are serialized by the key's lock.
 func SignDigest(k *EccKey, digest []byte) ([]byte, error) {
-	if !k.IsLive() {
+	unlock := k.acquire()
+	if unlock == nil {
 		return nil, errors.New("handles: EccKey is not live")
 	}
+	defer unlock()
 	if len(digest) == 0 {
 		return nil, errors.New("handles: SignDigest: empty digest")
 	}

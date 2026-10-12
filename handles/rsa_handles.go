@@ -161,8 +161,9 @@ func checkDigestLen(op string, hashType int, digest []byte) error {
 }
 
 // RsaVerifyPSS verifies an RSASSA-PSS signature using
-// MGF1 with the same hash family as hashType. saltLen is fixed at
-// hashLen.
+// MGF1 with the same hash family as hashType. wolfCrypt expects a salt of
+// hashLen bytes, except SHA-512 with a 1024-bit key, which uses
+// RSA_PSS_SALT_MAX_SZ.
 func RsaVerifyPSS(pub *RsaKey, hashType int, digest, sig []byte) error {
     unlock := pub.acquire()
     if unlock == nil {

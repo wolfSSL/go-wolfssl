@@ -128,18 +128,15 @@ func TestCreateSelfSignedWithSANs(t *testing.T) {
 		t.Errorf("got %d IP SANs, want 2 — %v", len(stdCert.IPAddresses), stdCert.IPAddresses)
 	}
 
-	// KeyUsage + ExtKeyUsage flow-through.
-	wantKU := 0x80 | 0x20 // digitalSignature | keyEncipherment (RFC 5280 ordering)
-	gotKU := int(stdCert.KeyUsage)
-	// crypto/x509's KeyUsage constants happen to match RFC 5280 bit
-	// positions but with bit 0 = digitalSignature (not 0x80). Just check
-	// that both flags were set, rather than the numeric value.
-	_ = wantKU
-	if gotKU == 0 {
-		t.Errorf("stdlib parsed zero KeyUsage")
+	// KeyUsage + ExtKeyUsage flow-through. wolfx509's constants share
+	// crypto/x509's values, so the parsed values compare directly.
+	if got, want := KeyUsage(stdCert.KeyUsage), KeyUsageDigitalSignature|KeyUsageKeyEncipherment; got != want {
+		t.Errorf("stdlib KeyUsage = %#x, want %#x", got, want)
 	}
-	if len(stdCert.ExtKeyUsage) != 2 {
-		t.Errorf("got %d ExtKeyUsage entries, want 2", len(stdCert.ExtKeyUsage))
+	if len(stdCert.ExtKeyUsage) != 2 ||
+		ExtKeyUsage(stdCert.ExtKeyUsage[0]) != ExtKeyUsageServerAuth ||
+		ExtKeyUsage(stdCert.ExtKeyUsage[1]) != ExtKeyUsageClientAuth {
+		t.Errorf("stdlib ExtKeyUsage = %v, want [ServerAuth ClientAuth]", stdCert.ExtKeyUsage)
 	}
 }
 

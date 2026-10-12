@@ -1020,3 +1020,29 @@ func TestAesGcmAppendedTagEncryptFailureReturnsNil(t *testing.T) {
 		t.Fatalf("failed encrypt returned output %x", got)
 	}
 }
+
+func TestChaChaAppendedTagEncryptFailureKeepsInPlacePlaintext(t *testing.T) {
+	iv := make([]byte, CHACHA20_POLY1305_AEAD_IV_SIZE)
+	plain := []byte("in-place plaintext")
+	buf := make([]byte, len(plain)+CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
+	copy(buf, plain)
+	if _, ret := Wc_ChaCha20Poly1305_Appended_Tag_Encrypt(nil, iv, nil, buf[:len(plain)], buf); ret == 0 {
+		t.Fatalf("encrypt with missing key succeeded")
+	}
+	if !bytes.Equal(buf[:len(plain)], plain) {
+		t.Fatalf("failed encrypt modified in-place plaintext: %x", buf[:len(plain)])
+	}
+}
+
+func TestChaChaAppendedTagEncryptFailureReturnsNil(t *testing.T) {
+	iv := make([]byte, CHACHA20_POLY1305_AEAD_IV_SIZE)
+	plain := []byte("plaintext")
+	out := make([]byte, len(plain)+CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
+	got, ret := Wc_ChaCha20Poly1305_Appended_Tag_Encrypt(nil, iv, nil, plain, out)
+	if ret == 0 {
+		t.Fatalf("encrypt with missing key succeeded")
+	}
+	if got != nil {
+		t.Fatalf("failed encrypt returned output %x", got)
+	}
+}

@@ -133,6 +133,9 @@ func Wc_ChaCha20Poly1305_Appended_Tag_Encrypt(inKey, inIv, inAAD, inPlain, outCi
     }
 
     ret := Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, longOutCipher[:(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)], outAuthTag[:])
+    if ret != 0 {
+        return nil, ret
+    }
     copy(longOutCipher[(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE):], outAuthTag[:])
     return longOutCipher, ret
 }

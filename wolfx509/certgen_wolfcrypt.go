@@ -116,15 +116,16 @@ func sigTypeFor(alg handles.Algorithm) (int, error) {
 // All fields are optional unless marked otherwise. NotBefore/NotAfter is
 // ignored by CSR generation (CSRs don't carry validity) and required otherwise.
 type certBuildOpts struct {
-	SubjectCN   string    // CommonName; truncated if >= 64 bytes
-	Serial      []byte    // up to 20 bytes; ignored for CSRs, generated if empty
-	NotBefore   time.Time // Date marking the start of validity
-	NotAfter    time.Time // Date marking the end of validity
-	IsCA        bool      // BasicConstraints CA:TRUE
-	KeyUsage    int       // OR of wcKeyUsage* constants
-	ExtKeyUsage int       // OR of wcExtKeyUsage* constants
-	DNSNames    []string  // SubjectAltName dNSName entries
-	IPAddresses []net.IP  // SubjectAltName iPAddress entries
+	SubjectCN      string    // CommonName; truncated if >= 64 bytes
+	Serial         []byte    // up to 20 bytes; ignored for CSRs, generated if empty
+	NotBefore      time.Time // Date marking the start of validity
+	NotAfter       time.Time // Date marking the end of validity
+	IsCA           bool      // BasicConstraints CA:TRUE
+	KeyUsage       int       // OR of wcKeyUsage* constants
+	ExtKeyUsage    int       // OR of wcExtKeyUsage* constants
+	DNSNames       []string  // SubjectAltName dNSName entries
+	EmailAddresses []string  // SubjectAltName rfc822Name entries
+	IPAddresses    []net.IP  // SubjectAltName iPAddress entries
 
 	// BasicConstraintsValid requests the BasicConstraints extension.
 	BasicConstraintsValid bool
@@ -237,8 +238,8 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 		cert.subject.commonName[len(cnBytes)] = 0
 	}
 
-	if len(opts.DNSNames) > 0 || len(opts.IPAddresses) > 0 {
-		sans, err := buildSANsDER(opts.DNSNames, opts.IPAddresses)
+	if len(opts.DNSNames) > 0 || len(opts.EmailAddresses) > 0 || len(opts.IPAddresses) > 0 {
+		sans, err := buildSANsDER(opts.DNSNames, opts.EmailAddresses, opts.IPAddresses)
 		if err != nil {
 			return nil, fmt.Errorf("wolfx509: build SANs: %w", err)
 		}
@@ -295,15 +296,25 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	return derOut[:signedSz], nil
 }
 
-// buildSANsDER serializes dnsNames + ipAddresses as an ASN.1 SEQUENCE of
-// GeneralName CHOICE elements (RFC 5280 §4.2.1.6). Context-specific
-// implicit tags: dNSName=[2] IA5String, iPAddress=[7] OCTET STRING.
-func buildSANsDER(dnsNames []string, ipAddresses []net.IP) ([]byte, error) {
+// buildSANsDER serializes dnsNames + emails + ipAddresses as an ASN.1
+// SEQUENCE of GeneralName CHOICE elements (RFC 5280 §4.2.1.6).
+// Context-specific implicit tags: rfc822Name=[1] IA5String,
+// dNSName=[2] IA5String, iPAddress=[7] OCTET STRING.
+func buildSANsDER(dnsNames, emails []string, ipAddresses []net.IP) ([]byte, error) {
 	var entries []asn1.RawValue
 	for _, name := range dnsNames {
 		entries = append(entries, asn1.RawValue{
 			Tag: 2, Class: asn1.ClassContextSpecific, IsCompound: false,
 			Bytes: []byte(name),
+		})
+	}
+	for _, email := range emails {
+		if !isIA5String(email) {
+			return nil, fmt.Errorf("email SAN %q is not a non-empty IA5String without NUL", email)
+		}
+		entries = append(entries, asn1.RawValue{
+			Tag: 1, Class: asn1.ClassContextSpecific, IsCompound: false,
+			Bytes: []byte(email),
 		})
 	}
 	for _, ip := range ipAddresses {
@@ -320,4 +331,17 @@ func buildSANsDER(dnsNames []string, ipAddresses []net.IP) ([]byte, error) {
 		})
 	}
 	return asn1.Marshal(entries)
+}
+
+// isIA5String reports whether s is non-empty 7-bit ASCII with no NUL bytes.
+func isIA5String(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 || s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

@@ -606,3 +606,56 @@ func TestBasicConstraintsMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateCertificateEmailSANs(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	emails := []string{"admin@example.com", "ops@example.org"}
+	tmpl := &Certificate{
+		SerialNumber:   big.NewInt(3),
+		Subject:        Name{CommonName: "email-san"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(24 * time.Hour),
+		DNSNames:       []string{"host.example"},
+		EmailAddresses: emails,
+	}
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	stdCert, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib parse: %v", err)
+	}
+	if len(stdCert.EmailAddresses) != len(emails) ||
+		stdCert.EmailAddresses[0] != emails[0] || stdCert.EmailAddresses[1] != emails[1] {
+		t.Errorf("cert EmailAddresses = %v, want %v", stdCert.EmailAddresses, emails)
+	}
+
+	csrDER, err := CreateCertificateRequest(&CertificateRequest{
+		Subject:        Name{CommonName: "email-san"},
+		EmailAddresses: emails,
+	}, k)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	stdCSR, err := stdlibParseCSR(csrDER)
+	if err != nil {
+		t.Fatalf("stdlib parse CSR: %v", err)
+	}
+	if len(stdCSR.EmailAddresses) != len(emails) ||
+		stdCSR.EmailAddresses[0] != emails[0] || stdCSR.EmailAddresses[1] != emails[1] {
+		t.Errorf("CSR EmailAddresses = %v, want %v", stdCSR.EmailAddresses, emails)
+	}
+
+	for _, bad := range []string{"usér@example.com", "a\x00b@example.com"} {
+		tmpl.EmailAddresses = []string{bad}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted email SAN %q", bad)
+		}
+	}
+}

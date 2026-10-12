@@ -73,16 +73,17 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 	}
 
 	opts := certBuildOpts{
-		SubjectCN:   template.Subject.CommonName,
-		Serial:      serial,
-		NotBefore:   notBefore,
-		NotAfter:    notAfter,
-		IsCA:        template.IsCA,
-		KeyUsage:    translateKeyUsage(template.KeyUsage),
-		ExtKeyUsage: translateExtKeyUsage(template.ExtKeyUsage),
-		DNSNames:    template.DNSNames,
-		IPAddresses: template.IPAddresses,
-		AcmeKeyAuth: template.AcmeKeyAuth,
+		SubjectCN:             template.Subject.CommonName,
+		Serial:                serial,
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		IsCA:                  template.IsCA,
+		KeyUsage:              translateKeyUsage(template.KeyUsage),
+		ExtKeyUsage:           translateExtKeyUsage(template.ExtKeyUsage),
+		DNSNames:              template.DNSNames,
+		EmailAddresses:        template.EmailAddresses,
+		IPAddresses:           template.IPAddresses,
+		AcmeKeyAuth:           template.AcmeKeyAuth,
 		BasicConstraintsValid: template.BasicConstraintsValid,
 	}
 
@@ -138,9 +139,10 @@ func CreateCertificateRequest(template *CertificateRequest, key KeyHandle) ([]by
 		return nil, fmt.Errorf("%w: only ECDSAWithSHA256 is supported", ErrUnsupportedCreateMode)
 	}
 	return makeAndSignCSR(certBuildOpts{
-		SubjectCN:   template.Subject.CommonName,
-		DNSNames:    template.DNSNames,
-		IPAddresses: template.IPAddresses,
+		SubjectCN:      template.Subject.CommonName,
+		DNSNames:       template.DNSNames,
+		EmailAddresses: template.EmailAddresses,
+		IPAddresses:    template.IPAddresses,
 	}, key)
 }
 

@@ -938,3 +938,58 @@ func TestVerifyEnforcesIntermediateExtKeyUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectoryString(t *testing.T) {
+	ucs4 := func(r ...rune) []byte {
+		var b []byte
+		for _, c := range r {
+			b = append(b, byte(c>>24), byte(c>>16), byte(c>>8), byte(c))
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		tag  int
+		in   []byte
+		want string
+	}{
+		{"UTF8String", asn1.TagUTF8String, []byte("h\xc3\xa9"), "h\u00e9"},
+		{"PrintableString", asn1.TagPrintableString, []byte("abc"), "abc"},
+		{"UTF8String invalid", asn1.TagUTF8String, []byte{0xff, 0xfe}, ""},
+		{"PrintableString non-ASCII", asn1.TagPrintableString, []byte{'a', 0xe9}, ""},
+		{"T61String Latin-1", asn1.TagT61String, []byte{'h', 0xe9}, "h\u00e9"},
+		{"BMPString surrogate", asn1.TagBMPString, []byte{0xd8, 0x00, 0xdc, 0x00}, ""},
+		{"IA5String", asn1.TagIA5String, []byte("abc"), "abc"},
+		{"BMPString", asn1.TagBMPString, []byte{0x00, 0x68, 0x00, 0xe9}, "h\u00e9"},
+		{"UniversalString", 28, ucs4('h', 0xe9, 0x1f600), "h\u00e9\U0001f600"},
+		{"UniversalString odd length", 28, []byte{0, 0, 0}, ""},
+		{"UniversalString surrogate", 28, ucs4(0xd800), ""},
+		{"UniversalString out of range", 28, ucs4(0x110000), ""},
+		{"unsupported tag", asn1.TagInteger, []byte{1}, ""},
+	} {
+		if got := directoryString(asn1.RawValue{Tag: tc.tag, Bytes: tc.in}); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestParseCertificateCommonNameNotTakenFromOtherAttributes(t *testing.T) {
+	der, err := stdlibCertWithSubject(pkix.Name{
+		Organization:       []string{"Acme/CN=admin"},
+		OrganizationalUnit: []string{"x/CN=root/OU=y"},
+	})
+	if err != nil {
+		t.Fatalf("stdlibCertWithSubject: %v", err)
+	}
+	c, err := ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	defer c.Free()
+	if c.Subject.CommonName != "" {
+		t.Errorf("Subject.CommonName = %q, want empty", c.Subject.CommonName)
+	}
+	if c.Issuer.CommonName != "" {
+		t.Errorf("Issuer.CommonName = %q, want empty", c.Issuer.CommonName)
+	}
+}

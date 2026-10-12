@@ -141,6 +141,10 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 		// even when NAME_get_text_by_NID doesn't find the RDN by number.
 		subject.CommonName = wolfSSL.WolfSSL_X509_get_subjectCN(x)
 	}
+	issuer := nameFromWolfSSL(wolfSSL.WolfSSL_X509_get_issuer_name(x))
+	if issuer.CommonName == "" {
+		issuer.CommonName = issuerCommonName(der)
+	}
 
 	notBefore, err := parseASN1Time(wolfSSL.WolfSSL_X509_get_notBefore_str(x))
 	if err != nil {
@@ -157,7 +161,7 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 		x:         x,
 		Raw:       append([]byte(nil), der...),
 		Subject:   subject,
-		Issuer:    nameFromWolfSSL(wolfSSL.WolfSSL_X509_get_issuer_name(x)),
+		Issuer:    issuer,
 		NotBefore: notBefore,
 		NotAfter:  notAfter,
 	}

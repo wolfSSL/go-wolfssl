@@ -110,3 +110,18 @@ func stdlibCertWithExtensions(exts ...pkix.Extension) ([]byte, error) {
 	}
 	return x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 }
+
+// stdlibCertWithSubject self-signs a crypto/x509 certificate for subject.
+func stdlibCertWithSubject(subject pkix.Name) ([]byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      subject,
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	return x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+}

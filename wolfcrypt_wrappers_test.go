@@ -950,3 +950,19 @@ func TestKeyPemToDerRejectsPassphraseWithNul(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestEccVerifyHashClearsResultOnError(t *testing.T) {
+	sig := make([]byte, 72)
+	hash := make([]byte, 32)
+	res := 1
+	ret := Wc_ecc_verify_hash(sig, len(sig), hash, len(hash), &res, nil)
+	if ret == notCompiledE {
+		t.Skip("ECC not compiled")
+	}
+	if ret == 0 {
+		t.Fatalf("verify with nil key succeeded")
+	}
+	if res != 0 {
+		t.Fatalf("failed verify left res = %d", res)
+	}
+}

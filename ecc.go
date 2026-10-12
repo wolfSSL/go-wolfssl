@@ -285,9 +285,12 @@ func Wc_ecc_verify_hash(sig []byte, sigLen int, hash []byte, hashLen int, res *i
     if res == nil || len(sig) == 0 || len(hash) == 0 {
         return BAD_FUNC_ARG
     }
-    cRes := C.int(*res)
+    cRes := C.int(0)
     ret := int(C.wc_ecc_verify_hash((*C.uchar)(unsafe.Pointer(&sig[0])), C.word32(sigLen),
         (*C.uchar)(unsafe.Pointer(&hash[0])), C.word32(hashLen), &cRes, key))
+    if ret != 0 {
+        cRes = 0
+    }
     *res = int(cRes)
     return ret
 }

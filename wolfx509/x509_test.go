@@ -130,9 +130,11 @@ func TestVerifyWithRoot(t *testing.T) {
 	}
 	defer cert.Free()
 
-	if _, err := cert.Verify(VerifyOptions{Roots: pool}); err != nil {
+	chains, err := cert.Verify(VerifyOptions{Roots: pool})
+	if err != nil {
 		t.Fatalf("Verify with correct CA failed: %v", err)
 	}
+	FreeChains(chains)
 }
 
 func TestVerifyWithoutRoot(t *testing.T) {
@@ -198,7 +200,8 @@ func TestVerifyChains(t *testing.T) {
 		{"no roots", newPool(t), newPool(t, "ca-int-cert.pem", "ca-int2-cert.pem"), false},
 	}
 	for _, tt := range tests {
-		_, err := leaf.Verify(VerifyOptions{Roots: tt.roots, Intermediates: tt.intermediates})
+		chains, err := leaf.Verify(VerifyOptions{Roots: tt.roots, Intermediates: tt.intermediates})
+		FreeChains(chains)
 		if (err == nil) != tt.wantOK {
 			t.Errorf("%s: err = %v, want ok = %v", tt.name, err, tt.wantOK)
 		}
@@ -221,9 +224,11 @@ func TestVerifyConcurrent(t *testing.T) {
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			if _, err := leaf.Verify(good); err != nil {
+			chains, err := leaf.Verify(good)
+			if err != nil {
 				t.Errorf("good chain failed: %v", err)
 			}
+			FreeChains(chains)
 		}()
 		go func() {
 			defer wg.Done()
@@ -233,9 +238,11 @@ func TestVerifyConcurrent(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			if _, err := leaf.Verify(samePool); err != nil {
+			chains, err := leaf.Verify(samePool)
+			if err != nil {
 				t.Errorf("same pool as Roots and Intermediates failed: %v", err)
 			}
+			FreeChains(chains)
 		}()
 	}
 	wg.Wait()
@@ -615,6 +622,319 @@ func TestVerifyReturnsVerifiedChain(t *testing.T) {
 	for i, f := range want {
 		if !chains[0][i].Equal(parseCert(t, f)) {
 			t.Errorf("chain[%d] is not %s", i, f)
+		}
+	}
+}
+
+func TestVerifyEnforcesExtKeyUsage(t *testing.T) {
+	// client-int-cert.pem carries EKU clientAuth + emailProtection; the
+	// ca-cert.pem root carries serverAuth + clientAuth.
+	leaf := parseCert(t, "client-int-cert.pem")
+	roots := newPool(t, "ca-cert.pem")
+	inter := newPool(t, "ca-int-cert.pem", "ca-int2-cert.pem")
+	for _, tt := range []struct {
+		usages []ExtKeyUsage
+		wantOK bool
+	}{
+		{nil, true},
+		{[]ExtKeyUsage{ExtKeyUsageServerAuth}, false},
+		{[]ExtKeyUsage{ExtKeyUsageCodeSigning, ExtKeyUsageServerAuth}, false},
+		{[]ExtKeyUsage{ExtKeyUsageClientAuth}, true},
+		{[]ExtKeyUsage{ExtKeyUsageServerAuth, ExtKeyUsageEmailProtection}, false},
+		{[]ExtKeyUsage{ExtKeyUsageCodeSigning, ExtKeyUsageClientAuth}, true},
+		{[]ExtKeyUsage{ExtKeyUsageAny}, true},
+	} {
+		chains, err := leaf.Verify(VerifyOptions{Roots: roots, Intermediates: inter, KeyUsages: tt.usages})
+		FreeChains(chains)
+		if (err == nil) != tt.wantOK {
+			t.Errorf("KeyUsages=%v: err = %v, want ok = %v", tt.usages, err, tt.wantOK)
+		}
+		if err != nil && !errors.Is(err, ErrVerifyFailed) {
+			t.Errorf("KeyUsages=%v: err = %v, want wrapping ErrVerifyFailed", tt.usages, err)
+		}
+	}
+}
+
+func TestVerifyExtKeyUsageTriesAlternativePath(t *testing.T) {
+	newKey := func() KeyHandle {
+		k, err := GenerateP256Key()
+		if err != nil {
+			t.Fatalf("GenerateP256Key: %v", err)
+		}
+		t.Cleanup(k.Free)
+		return k
+	}
+	issue := func(tmpl, parent *Certificate, pub, signer KeyHandle) *Certificate {
+		tmpl.NotBefore = time.Now().Add(-time.Hour)
+		tmpl.NotAfter = time.Now().Add(24 * time.Hour)
+		der, err := CreateCertificate(tmpl, parent, pub, signer)
+		if err != nil {
+			t.Fatalf("CreateCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		c, err := ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("ParseCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		t.Cleanup(c.Free)
+		return c
+	}
+	rootKey, interKey, leafKey := newKey(), newKey(), newKey()
+	rootTmpl := &Certificate{SerialNumber: big.NewInt(1), Subject: Name{CommonName: "alt-path root"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}
+	root := issue(rootTmpl, rootTmpl, rootKey, rootKey)
+	// Two certificates for the same intermediate name and key: one limited
+	// to client auth, one unrestricted.
+	clientOnly := issue(&Certificate{SerialNumber: big.NewInt(2), Subject: Name{CommonName: "alt-path CA"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign,
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageClientAuth}}, root, interKey, rootKey)
+	open := issue(&Certificate{SerialNumber: big.NewInt(3), Subject: Name{CommonName: "alt-path CA"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}, root, interKey, rootKey)
+	leaf := issue(&Certificate{SerialNumber: big.NewInt(4), Subject: Name{CommonName: "alt-path leaf"},
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageServerAuth}}, clientOnly, leafKey, interKey)
+
+	roots := NewCertPool()
+	t.Cleanup(roots.Free)
+	if err := roots.AddCert(root); err != nil {
+		t.Fatalf("AddCert(root): %v", err)
+	}
+	for name, order := range map[string][]*Certificate{
+		"restricted first": {clientOnly, open},
+		"open first":       {open, clientOnly},
+	} {
+		inters := NewCertPool()
+		t.Cleanup(inters.Free)
+		for _, c := range order {
+			if err := inters.AddCert(c); err != nil {
+				t.Fatalf("AddCert: %v", err)
+			}
+		}
+		chains, err := leaf.Verify(VerifyOptions{Roots: roots, Intermediates: inters,
+			KeyUsages: []ExtKeyUsage{ExtKeyUsageServerAuth}})
+		if err != nil {
+			t.Errorf("%s: Verify: %v", name, err)
+			continue
+		}
+		if len(chains[0]) != 3 || !chains[0][1].Equal(open) {
+			t.Errorf("%s: chain does not go through the unrestricted intermediate", name)
+		}
+		if _, _, err := chains[0][1].PublicECCRawXY(); err != nil {
+			t.Errorf("%s: returned chain certificate is not usable: %v", name, err)
+		}
+		FreeChains(chains)
+	}
+
+	// One pool as both Roots and Intermediates: the restricted CA must not
+	// come back through the trust store once it is dropped.
+	for name, order := range map[string][]*Certificate{
+		"same pool, restricted first": {root, clientOnly, open},
+		"same pool, open first":       {root, open, clientOnly},
+	} {
+		pool := NewCertPool()
+		t.Cleanup(pool.Free)
+		for _, c := range order {
+			if err := pool.AddCert(c); err != nil {
+				t.Fatalf("AddCert: %v", err)
+			}
+		}
+		chains, err := leaf.Verify(VerifyOptions{Roots: pool, Intermediates: pool,
+			KeyUsages: []ExtKeyUsage{ExtKeyUsageServerAuth}})
+		if err != nil {
+			t.Errorf("%s: Verify: %v", name, err)
+			continue
+		}
+		if len(chains[0]) != 3 || !chains[0][1].Equal(open) {
+			t.Errorf("%s: chain does not go through the unrestricted intermediate", name)
+		}
+		FreeChains(chains)
+	}
+
+	// More restricted alternatives than any small fixed retry budget.
+	many := NewCertPool()
+	t.Cleanup(many.Free)
+	for i := 0; i < 20; i++ {
+		c := issue(&Certificate{SerialNumber: big.NewInt(int64(100 + i)), Subject: Name{CommonName: "alt-path CA"},
+			IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign,
+			ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageClientAuth}}, root, interKey, rootKey)
+		if err := many.AddCert(c); err != nil {
+			t.Fatalf("AddCert: %v", err)
+		}
+	}
+	if err := many.AddCert(open); err != nil {
+		t.Fatalf("AddCert: %v", err)
+	}
+	chains, err := leaf.Verify(VerifyOptions{Roots: roots, Intermediates: many,
+		KeyUsages: []ExtKeyUsage{ExtKeyUsageServerAuth}})
+	if err != nil {
+		t.Errorf("20 restricted alternatives: Verify: %v", err)
+	}
+	FreeChains(chains)
+
+	only := NewCertPool()
+	t.Cleanup(only.Free)
+	if err := only.AddCert(clientOnly); err != nil {
+		t.Fatalf("AddCert: %v", err)
+	}
+	_, err = leaf.Verify(VerifyOptions{Roots: roots, Intermediates: only,
+		KeyUsages: []ExtKeyUsage{ExtKeyUsageServerAuth}})
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Errorf("restricted path only: err = %v, want ErrVerifyFailed", err)
+	}
+	if errors.As(err, &UnknownAuthorityError{}) {
+		t.Errorf("restricted path only: err = %v is reported as an unknown authority", err)
+	}
+
+	// Restrictions split across two CAs: leaf {server, client} <- caA
+	// {client} <- caB {server} <- root leaves no common usage, but an
+	// unrestricted caA certificate gives {server}.
+	caBKey, caAKey, leaf2Key := newKey(), newKey(), newKey()
+	caB := issue(&Certificate{SerialNumber: big.NewInt(5), Subject: Name{CommonName: "split CA B"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign,
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageServerAuth}}, root, caBKey, rootKey)
+	caAClient := issue(&Certificate{SerialNumber: big.NewInt(6), Subject: Name{CommonName: "split CA A"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign,
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageClientAuth}}, caB, caAKey, caBKey)
+	caAOpen := issue(&Certificate{SerialNumber: big.NewInt(7), Subject: Name{CommonName: "split CA A"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}, caB, caAKey, caBKey)
+	leaf2 := issue(&Certificate{SerialNumber: big.NewInt(8), Subject: Name{CommonName: "split leaf"},
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageServerAuth, ExtKeyUsageClientAuth}}, caAClient, leaf2Key, caAKey)
+	for name, order := range map[string][]*Certificate{
+		"restricted first": {caB, caAClient, caAOpen},
+		"open first":       {caB, caAOpen, caAClient},
+	} {
+		inters := NewCertPool()
+		t.Cleanup(inters.Free)
+		for _, c := range order {
+			if err := inters.AddCert(c); err != nil {
+				t.Fatalf("AddCert: %v", err)
+			}
+		}
+		chains, err := leaf2.Verify(VerifyOptions{Roots: roots, Intermediates: inters,
+			KeyUsages: []ExtKeyUsage{ExtKeyUsageServerAuth, ExtKeyUsageClientAuth}})
+		if err != nil {
+			t.Errorf("split restrictions, %s: Verify: %v", name, err)
+			continue
+		}
+		if len(chains[0]) != 4 || !chains[0][1].Equal(caAOpen) {
+			t.Errorf("split restrictions, %s: chain does not go through the unrestricted CA", name)
+		}
+		FreeChains(chains)
+	}
+}
+
+func TestVerifyExtKeyUsageKeepsIntermediateTrustAnchor(t *testing.T) {
+	newKey := func() KeyHandle {
+		k, err := GenerateP256Key()
+		if err != nil {
+			t.Fatalf("GenerateP256Key: %v", err)
+		}
+		t.Cleanup(k.Free)
+		return k
+	}
+	issue := func(tmpl, parent *Certificate, pub, signer KeyHandle) *Certificate {
+		tmpl.NotBefore = time.Now().Add(-time.Hour)
+		tmpl.NotAfter = time.Now().Add(24 * time.Hour)
+		der, err := CreateCertificate(tmpl, parent, pub, signer)
+		if err != nil {
+			t.Fatalf("CreateCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		c, err := ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("ParseCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		t.Cleanup(c.Free)
+		return c
+	}
+	rootKey, interKey, leafKey := newKey(), newKey(), newKey()
+	rootTmpl := &Certificate{SerialNumber: big.NewInt(1), Subject: Name{CommonName: "anchor test root"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}
+	root := issue(rootTmpl, rootTmpl, rootKey, rootKey)
+	inter := issue(&Certificate{SerialNumber: big.NewInt(2), Subject: Name{CommonName: "anchor test CA"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}, root, interKey, rootKey)
+	leaf := issue(&Certificate{SerialNumber: big.NewInt(3), Subject: Name{CommonName: "anchor test leaf"},
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageServerAuth}}, inter, leafKey, interKey)
+
+	roots := NewCertPool()
+	t.Cleanup(roots.Free)
+	if err := roots.AddCert(inter); err != nil {
+		t.Fatalf("AddCert(inter): %v", err)
+	}
+	// KeyUsages must not change which Roots are trusted.
+	baseline, baseErr := leaf.Verify(VerifyOptions{Roots: roots})
+	FreeChains(baseline)
+	for _, usages := range [][]ExtKeyUsage{
+		{ExtKeyUsageServerAuth},
+		{ExtKeyUsageClientAuth, ExtKeyUsageServerAuth},
+	} {
+		chains, err := leaf.Verify(VerifyOptions{Roots: roots, KeyUsages: usages})
+		if (err == nil) != (baseErr == nil) {
+			t.Errorf("KeyUsages=%v: err = %v, but without KeyUsages err = %v", usages, err, baseErr)
+		}
+		if err == nil && (len(chains[0]) != 2 || !chains[0][1].Equal(inter)) {
+			t.Errorf("KeyUsages=%v: chain does not end at the trusted CA", usages)
+		}
+		FreeChains(chains)
+	}
+	_, err := leaf.Verify(VerifyOptions{Roots: roots, KeyUsages: []ExtKeyUsage{ExtKeyUsageClientAuth}})
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Errorf("KeyUsages=[ClientAuth]: err = %v, want ErrVerifyFailed", err)
+	}
+}
+
+func TestVerifyEnforcesIntermediateExtKeyUsage(t *testing.T) {
+	newKey := func() KeyHandle {
+		k, err := GenerateP256Key()
+		if err != nil {
+			t.Fatalf("GenerateP256Key: %v", err)
+		}
+		t.Cleanup(k.Free)
+		return k
+	}
+	issue := func(tmpl, parent *Certificate, pub, signer KeyHandle) *Certificate {
+		tmpl.NotBefore = time.Now().Add(-time.Hour)
+		tmpl.NotAfter = time.Now().Add(24 * time.Hour)
+		der, err := CreateCertificate(tmpl, parent, pub, signer)
+		if err != nil {
+			t.Fatalf("CreateCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		c, err := ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("ParseCertificate(%s): %v", tmpl.Subject.CommonName, err)
+		}
+		t.Cleanup(c.Free)
+		return c
+	}
+	rootKey, interKey, leafKey := newKey(), newKey(), newKey()
+	rootTmpl := &Certificate{SerialNumber: big.NewInt(1), Subject: Name{CommonName: "eku root"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign}
+	root := issue(rootTmpl, rootTmpl, rootKey, rootKey)
+	inter := issue(&Certificate{SerialNumber: big.NewInt(2), Subject: Name{CommonName: "eku client-only CA"},
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: KeyUsageCertSign,
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageClientAuth}}, root, interKey, rootKey)
+	leaf := issue(&Certificate{SerialNumber: big.NewInt(3), Subject: Name{CommonName: "eku leaf"},
+		ExtKeyUsage: []ExtKeyUsage{ExtKeyUsageServerAuth}}, inter, leafKey, interKey)
+
+	roots, inters := NewCertPool(), NewCertPool()
+	t.Cleanup(roots.Free)
+	t.Cleanup(inters.Free)
+	if err := roots.AddCert(root); err != nil {
+		t.Fatalf("AddCert(root): %v", err)
+	}
+	if err := inters.AddCert(inter); err != nil {
+		t.Fatalf("AddCert(inter): %v", err)
+	}
+	for _, tt := range []struct {
+		usages []ExtKeyUsage
+		wantOK bool
+	}{
+		{nil, true},
+		{[]ExtKeyUsage{ExtKeyUsageAny}, true},
+		{[]ExtKeyUsage{ExtKeyUsageServerAuth}, false},
+		{[]ExtKeyUsage{ExtKeyUsageClientAuth}, false},
+	} {
+		chains, err := leaf.Verify(VerifyOptions{Roots: roots, Intermediates: inters, KeyUsages: tt.usages})
+		FreeChains(chains)
+		if (err == nil) != tt.wantOK {
+			t.Errorf("KeyUsages=%v: err = %v, want ok = %v", tt.usages, err, tt.wantOK)
 		}
 	}
 }

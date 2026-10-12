@@ -24,6 +24,15 @@ entirely on wolfCrypt-owned key handles.
   wolfSSL always uses the system clock. Concurrent calls that share a
   `Roots` pool run one at a time, because wolfSSL doesn't support
   concurrent verification on one X509_STORE.
+  `VerifyOptions.KeyUsages` requires the leaf and every CA in the
+  verified chain to permit one of the listed extended key usages;
+  unlike `crypto/x509`, an empty list skips the check instead of
+  requiring server auth. When the chain wolfSSL builds fails the check,
+  Verify rebuilds it without each CA, intermediate or root, that
+  narrowed the usages (a search that hits its rebuild budget returns
+  `ErrUnsupported`). Usages match exactly, as in current `crypto/x509`. Every certificate in a
+  returned chain is a new Certificate owned by the caller; release
+  them with `FreeChains`.
 - `(c *Certificate) PublicECCRawXY()` — raw `(X, Y)` point export
   for ECDSA-P256 leaves.
 

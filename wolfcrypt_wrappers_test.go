@@ -879,3 +879,22 @@ func TestKeyPemToDerWithPassphrase(t *testing.T) {
 		t.Fatalf("Wc_KeyPemToDer: got %d, want %d matching bytes", n, len(der))
 	}
 }
+
+func TestBlake2sHmacLeavesTrailingOutputUntouched(t *testing.T) {
+	out := make([]byte, WC_BLAKE2S_256_DIGEST_SIZE+8)
+	for i := range out {
+		out[i] = 0xA5
+	}
+	ret := Wc_Blake2s_HMAC_ex(out, []byte("msg"), []byte("key"), WC_BLAKE2S_256_DIGEST_SIZE)
+	if ret == notCompiledE {
+		t.Skip("BLAKE2s not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_Blake2s_HMAC_ex: %d", ret)
+	}
+	for i := WC_BLAKE2S_256_DIGEST_SIZE; i < len(out); i++ {
+		if out[i] != 0xA5 {
+			t.Fatalf("byte %d beyond outlen was modified", i)
+		}
+	}
+}

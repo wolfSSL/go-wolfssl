@@ -93,6 +93,7 @@ func Wc_Blake2s_HMAC_ex(out []byte, in, key []byte, outlen int) int {
     if outlen != WC_BLAKE2S_256_DIGEST_SIZE || len(out) < outlen {
         return BAD_FUNC_ARG
     }
+    out = out[:outlen]
     zeroMemory(out)
 
     var state Blake2s

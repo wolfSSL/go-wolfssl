@@ -1120,6 +1120,13 @@ func TestDial(t *testing.T) {
 
 func setupPair(t *testing.T) (client *Conn, server *Conn, cleanup func()) {
 	t.Helper()
+	return setupPairWith(t, nil)
+}
+
+// setupPairWith is setupPair with an optional wrapper around the client's
+// transport, applied before the TLS handshake.
+func setupPairWith(t *testing.T, wrapClient func(net.Conn) net.Conn) (client *Conn, server *Conn, cleanup func()) {
+	t.Helper()
 	certPEM := loadFile(t, certPath("server-cert.pem"))
 	keyPEM := loadFile(t, certPath("server-key.pem"))
 
@@ -1156,6 +1163,9 @@ func setupPair(t *testing.T) (client *Conn, server *Conn, cleanup func()) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer ln.Close()
+	if wrapClient != nil {
+		conn = wrapClient(conn)
+	}
 
 	cli := Client(conn, clientConfig)
 	if err := cli.Handshake(); err != nil {
@@ -1335,10 +1345,6 @@ func TestLargeReadWrite(t *testing.T) {
 func TestConcurrentReadWrite(t *testing.T) {
 	cli, srv, cleanup := setupPair(t)
 	defer cleanup()
-
-	if cli.sslWrite == cli.ssl {
-		t.Skip("wolfSSL built without HAVE_WRITE_DUP; concurrent Read+Write serialized")
-	}
 
 	const messages = 100
 	const msgSize = 512

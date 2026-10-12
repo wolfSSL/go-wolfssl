@@ -48,6 +48,10 @@ type recordingConn struct {
 	net.Conn
 	mu          sync.Mutex
 	lastReadErr error
+	// buffered: Read and Write share one WOLFSSL, so Conn.Read waits on the
+	// transport outside the session lock and the recv callback serves pending.
+	buffered bool
+	pending  []byte
 }
 
 func (r *recordingConn) Read(b []byte) (int, error) {
@@ -58,6 +62,40 @@ func (r *recordingConn) Read(b []byte) (int, error) {
 		r.mu.Unlock()
 	}
 	return n, err
+}
+
+func (r *recordingConn) setBuffered() {
+	r.mu.Lock()
+	r.buffered = true
+	r.mu.Unlock()
+}
+
+// takeBuffered copies queued transport bytes into b. ok is false when the
+// recv callback should read the transport directly instead.
+func (r *recordingConn) takeBuffered(b []byte) (n int, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.buffered {
+		return 0, false
+	}
+	n = copy(b, r.pending)
+	r.pending = r.pending[n:]
+	if len(r.pending) == 0 {
+		r.pending = nil
+	}
+	return n, true
+}
+
+// fill blocks on the transport and queues what arrives for the recv callback.
+func (r *recordingConn) fill(b []byte) error {
+	n, err := r.Conn.Read(b)
+	if n > 0 {
+		r.mu.Lock()
+		r.pending = append(r.pending, b[:n]...)
+		r.mu.Unlock()
+		return nil
+	}
+	return err
 }
 
 func (r *recordingConn) takeLastReadErr() error {
@@ -86,10 +124,13 @@ type Conn struct {
 	// a past deadline on c.conn.
 	mu sync.RWMutex
 
-	// muRead/muWrite serialize wolfSSL_read/wolfSSL_write. Aliased to the
-	// same mutex when HAVE_WRITE_DUP unavailable.
+	// muRead/muWrite serialize Read and Write callers. sslMu is set only
+	// when HAVE_WRITE_DUP is unavailable and guards each call into the
+	// single shared WOLFSSL; it is never held while waiting on the network.
 	muRead  *sync.Mutex
 	muWrite *sync.Mutex
+	sslMu   *sync.Mutex
+	rbuf    []byte
 
 	// wolfSSL objects — created during handshake
 	ctx      *wolfSSL.WOLFSSL_CTX
@@ -436,16 +477,17 @@ func (c *Conn) doHandshake() error {
 	}
 
 	// Split off a write-only WOLFSSL when HAVE_WRITE_DUP is built in;
-	// otherwise fall back to a single mutex serializing Read and Write.
+	// otherwise share one session under sslMu and buffer transport input.
+	c.muRead = &sync.Mutex{}
+	c.muWrite = &sync.Mutex{}
 	if dup := wolfSSL.WolfSSL_write_dup(c.ssl); dup != nil {
 		c.sslWrite = dup
-		c.muRead = &sync.Mutex{}
-		c.muWrite = &sync.Mutex{}
 	} else {
 		c.sslWrite = c.ssl
-		shared := &sync.Mutex{}
-		c.muRead = shared
-		c.muWrite = shared
+		c.sslMu = &sync.Mutex{}
+		if rc, ok := c.conn.(*recordingConn); ok {
+			rc.setBuffered()
+		}
 	}
 
 	return nil
@@ -520,11 +562,21 @@ func (c *Conn) Read(b []byte) (int, error) {
 	}
 	c.muRead.Lock()
 	defer c.muRead.Unlock()
-	n := wolfSSL.WolfSSL_read(c.ssl, b, uintptr(len(b)))
+	rc, _ := c.conn.(*recordingConn)
+	n, errCode := c.readRecord(b)
+	for n <= 0 && c.sslMu != nil && rc != nil && errCode == sslErrorWantRead {
+		if c.rbuf == nil {
+			c.rbuf = make([]byte, 16384)
+		}
+		if err := rc.fill(c.rbuf); err != nil {
+			return 0, err
+		}
+		n, errCode = c.readRecord(b)
+	}
 	if n > 0 {
 		return n, nil
 	}
-	if rc, ok := c.conn.(*recordingConn); ok {
+	if rc != nil {
 		if e := rc.takeLastReadErr(); e != nil {
 			return 0, e
 		}
@@ -532,9 +584,34 @@ func (c *Conn) Read(b []byte) (int, error) {
 	if n == 0 {
 		return 0, io.EOF
 	}
-	errCode := wolfSSL.WolfSSL_get_error(c.ssl, n)
 	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 	return 0, fmt.Errorf("wolftls: read error: %s (%d)", errMsg, errCode)
+}
+
+// readRecord runs one WolfSSL_read and returns its result and error code.
+func (c *Conn) readRecord(b []byte) (int, int) {
+	if c.sslMu != nil {
+		c.sslMu.Lock()
+		defer c.sslMu.Unlock()
+	}
+	n := wolfSSL.WolfSSL_read(c.ssl, b, uintptr(len(b)))
+	if n > 0 {
+		return n, 0
+	}
+	return n, wolfSSL.WolfSSL_get_error(c.ssl, n)
+}
+
+// writeRecord runs one WolfSSL_write and returns its result and error code.
+func (c *Conn) writeRecord(b []byte) (int, int) {
+	if c.sslMu != nil {
+		c.sslMu.Lock()
+		defer c.sslMu.Unlock()
+	}
+	n := wolfSSL.WolfSSL_write(c.sslWrite, b, uintptr(len(b)))
+	if n > 0 {
+		return n, 0
+	}
+	return n, wolfSSL.WolfSSL_get_error(c.sslWrite, n)
 }
 
 // Write writes data to the TLS connection. If the handshake has not yet
@@ -555,9 +632,8 @@ func (c *Conn) Write(b []byte) (int, error) {
 	defer c.muWrite.Unlock()
 	total := 0
 	for total < len(b) {
-		n := wolfSSL.WolfSSL_write(c.sslWrite, b[total:], uintptr(len(b)-total))
+		n, errCode := c.writeRecord(b[total:])
 		if n <= 0 {
-			errCode := wolfSSL.WolfSSL_get_error(c.sslWrite, n)
 			errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 			return total, fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
 		}

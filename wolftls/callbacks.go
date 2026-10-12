@@ -117,6 +117,8 @@ const (
 	cbioErrTimeout   = -6
 )
 
+const sslErrorWantRead = int(C.WOLFSSL_ERROR_WANT_READ)
+
 // ------------------------------------------------------------------
 // I/O callback registry: route wolfSSL record I/O through a Go net.Conn
 // ------------------------------------------------------------------
@@ -161,7 +163,14 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 	}
 
 	goBuf := make([]byte, int(sz))
-	n, err := ic.conn.Read(goBuf)
+	n, buffered := 0, false
+	if rc, ok := ic.conn.(*recordingConn); ok {
+		n, buffered = rc.takeBuffered(goBuf)
+	}
+	var err error
+	if !buffered {
+		n, err = ic.conn.Read(goBuf)
+	}
 	if n > 0 {
 		C.memcpy(unsafe.Pointer(buf), unsafe.Pointer(&goBuf[0]), C.size_t(n))
 		return C.int(n)

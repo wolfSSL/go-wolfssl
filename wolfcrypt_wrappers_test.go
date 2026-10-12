@@ -916,3 +916,29 @@ func TestAesInitRejectsGoHeapHint(t *testing.T) {
 	}
 	Wc_AesFree(aes)
 }
+
+func TestOneShotHashesRejectOversizedInput(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	out := make([]byte, 64)
+	hashes := []struct {
+		name string
+		fn   func([]byte, int, []byte) int
+	}{
+		{"md5", Wc_Md5Hash},
+		{"sha1", Wc_ShaHash},
+		{"sha256", Wc_Sha256Hash},
+		{"sha384", Wc_Sha384Hash},
+		{"sha512", Wc_Sha512Hash},
+	}
+	for _, h := range hashes {
+		if ret := h.fn([]byte("abc"), 3, out); ret == notCompiledE {
+			continue
+		} else if ret != 0 {
+			t.Fatalf("%s: %d", h.name, ret)
+		}
+		if ret := h.fn(huge, len(huge), out); ret != BAD_FUNC_ARG {
+			t.Errorf("%s oversized input: got %d, want %d", h.name, ret, BAD_FUNC_ARG)
+		}
+	}
+}

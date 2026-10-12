@@ -979,7 +979,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 }
 
 // SetDeadline sets the read and write deadlines on the underlying connection.
-// wolfSSL will observe these via the file descriptor's socket timeout.
+// Expiry is observed when TLS record I/O calls that connection's Read or Write.
 func (c *Conn) SetDeadline(t time.Time) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

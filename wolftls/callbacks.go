@@ -75,9 +75,15 @@ package wolftls
 //     wolfSSL_CTX_SetIOSend(ctx, ioSendTrampoline);
 // }
 // #ifdef HAVE_SNI
-// static inline void wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
+// static inline int wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
 //     wolfSSL_CTX_set_servername_callback(ctx, (CallbackSniRecv)sniTrampoline);
 //     wolfSSL_CTX_set_servername_arg(ctx, (void*)(intptr_t)connID);
+//     return 1;
+// }
+// #else
+// static inline int wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
+//     (void)ctx; (void)connID;
+//     return 0;
 // }
 // #endif
 // #ifdef WOLFSSL_CERT_SETUP_CB
@@ -262,9 +268,13 @@ func wolftlsSNICallback(sslPtr unsafe.Pointer, connID C.int) C.int {
 }
 
 // ctxSetSNICallback installs the SNI trampoline on ctx, with connID as
-// the opaque arg the trampoline will look up at handshake time.
-func ctxSetSNICallback(ctx *wolfSSL.WOLFSSL_CTX, connID int) {
-	C.wolftls_set_sni_cb((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx)), C.int(connID))
+// the opaque arg the trampoline will look up at handshake time. It returns
+// an error when wolfSSL was built without HAVE_SNI.
+func ctxSetSNICallback(ctx *wolfSSL.WOLFSSL_CTX, connID int) error {
+	if C.wolftls_set_sni_cb((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx)), C.int(connID)) != 1 {
+		return errors.New("wolftls: SNI callback requires wolfSSL built with HAVE_SNI")
+	}
+	return nil
 }
 
 // ------------------------------------------------------------------

@@ -42,6 +42,14 @@ package wolfSSL
 // static int ssl_SNI_GetRequest(WOLFSSL* ssl, char* out, int outSz) {
 //     (void)ssl; (void)out; (void)outSz; return 0;
 // }
+// int wolfSSL_UseSNI(WOLFSSL* ssl, unsigned char type, const void* data,
+//                    unsigned short size) {
+//     (void)ssl; (void)type; (void)data; (void)size; return -174;
+// }
+// int wolfSSL_CTX_UseSNI(WOLFSSL_CTX* ctx, unsigned char type,
+//                        const void* data, unsigned short size) {
+//     (void)ctx; (void)type; (void)data; (void)size; return -174;
+// }
 // #endif
 // #ifdef OPENSSL_ALL
 // #include <wolfssl/openssl/x509.h>

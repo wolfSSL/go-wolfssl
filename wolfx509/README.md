@@ -57,9 +57,10 @@ required to add new algorithms.
 Cgo directives live in `certgen_wolfcrypt.go`. Run
 `../generateOptions.sh <wolfssl-prefix>` once at the top of the tree
 to point them at your wolfSSL install; see the top-level
-[README.md](../README.md). The cert builder additionally needs
-wolfSSL configured with `WOLFSSL_CERT_GEN`, `WOLFSSL_CERT_EXT`,
-`WOLFSSL_CERT_REQ`, and (for the RFC 8737 ACME id-pe-acmeIdentifier
-extension) `WOLFSSL_ACME_OID`. Builds against vanilla wolfSSL without
-those flags compile and link, but cert minting falls through to a
-runtime `NOT_COMPILED_IN` (-174).
+[README.md](../README.md). The package requires wolfSSL configured
+with `WOLFSSL_CERT_GEN`, `WOLFSSL_CERT_EXT` and `WOLFSSL_ALT_NAMES`
+(for example `--enable-certgen --enable-certext
+CPPFLAGS=-DWOLFSSL_ALT_NAMES`, or `--enable-all`); without them it does
+not compile. `WOLFSSL_CERT_REQ` and (for the RFC 8737 ACME
+id-pe-acmeIdentifier extension) `WOLFSSL_ACME_OID` are optional: without
+them those cert-minting paths return `NOT_COMPILED_IN` (-174) at runtime.

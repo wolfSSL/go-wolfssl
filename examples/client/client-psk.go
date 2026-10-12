@@ -29,11 +29,16 @@ package main
 //        char* identity, unsigned int id_max_len, unsigned char* key,
 //        unsigned int key_max_len)
 //{
+//    static const char kIdentity[] = "Client_identity";
+//
 //    (void)ssl;
 //    (void)hint;
-//    (void)key_max_len;
 //
-//    strncpy(identity, "Client_identity", id_max_len);
+//    if (key_max_len < PSK_KEY_LEN || id_max_len < sizeof(kIdentity)) {
+//        return 0;
+//    }
+//
+//    memcpy(identity, kIdentity, sizeof(kIdentity));
 //
 //    key[0] = 26;
 //    key[1] = 43;

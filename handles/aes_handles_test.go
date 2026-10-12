@@ -23,6 +23,8 @@ package handles
 import (
 	"bytes"
 	"crypto/cipher"
+	"strings"
+	"sync"
 	"testing"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
@@ -179,4 +181,119 @@ func TestAesGcmAEADOpenFailureWipesPlaintext(t *testing.T) {
 		}
 	}
 	t.Fatal("decrypt output buffer was not wiped after authentication failure")
+}
+
+func TestAesGcmAEADZeroWipesKey(t *testing.T) {
+	var key [wolfSSL.AES_256_KEY_SIZE]byte
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	a := NewAesGcmAEAD(key)
+	nonce := make([]byte, a.NonceSize())
+	ciphertext := a.Seal(nil, nonce, []byte("data"), nil)
+
+	a.Zero()
+	if !allZero(a.st.key[:]) {
+		t.Fatal("Zero left key bytes in the AEAD")
+	}
+	if _, err := a.Open(nil, nonce, ciphertext, nil); err == nil {
+		t.Fatal("Open succeeded after Zero")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Seal did not panic after Zero")
+		}
+	}()
+	a.Seal(nil, nonce, []byte("data"), nil)
+}
+
+func TestAesGcmAEADZeroReachesCopies(t *testing.T) {
+	var key [wolfSSL.AES_256_KEY_SIZE]byte
+	key[0] = 0x11
+	a := NewAesGcmAEAD(key)
+	b := *a
+	a.Zero()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("copy of a zeroed AEAD could still Seal")
+		}
+	}()
+	b.Seal(nil, make([]byte, b.NonceSize()), []byte("data"), nil)
+}
+
+func TestAesGcmAEADZeroConcurrentWithUse(t *testing.T) {
+	var key [wolfSSL.AES_256_KEY_SIZE]byte
+	for i := range key {
+		key[i] = byte(0x80 + i)
+	}
+	a := NewAesGcmAEAD(key)
+	zeroKeyAEAD := NewAesGcmAEAD([wolfSSL.AES_256_KEY_SIZE]byte{})
+	nonce := make([]byte, a.NonceSize())
+	msg := []byte("concurrent zero")
+	ct0 := a.Seal(nil, nonce, msg, nil)
+	var ready, wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		ready.Add(1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			signalled := false
+			defer func() {
+				if !signalled {
+					ready.Done()
+				}
+				if r := recover(); r != nil {
+					if s, ok := r.(string); !ok || !strings.Contains(s, "after Zero") {
+						t.Errorf("unexpected panic: %v", r)
+					}
+				}
+			}()
+			for j := 0; j < 50; j++ {
+				ct := a.Seal(nil, nonce, msg, nil)
+				if _, err := zeroKeyAEAD.Open(nil, nonce, ct, nil); err == nil {
+					t.Error("Seal used a wiped key")
+				}
+				_, _ = a.Open(nil, nonce, ct, nil)
+				if !signalled {
+					signalled = true
+					ready.Done()
+				}
+			}
+		}()
+	}
+	ready.Wait()
+	a.Zero()
+	wg.Wait()
+	if _, err := a.Open(nil, nonce, ct0, nil); err == nil {
+		t.Fatal("Open succeeded after Zero")
+	}
+}
+
+func TestAesGcmAEADZeroWaitsForInFlightSeal(t *testing.T) {
+	var key [wolfSSL.AES_256_KEY_SIZE]byte
+	for i := range key {
+		key[i] = byte(0x40 + i)
+	}
+	a := NewAesGcmAEAD(key)
+	nonce := make([]byte, a.NonceSize())
+	msg := []byte("in flight")
+
+	entered, release := holdFirstAcquire(t)
+	sealed := make(chan []byte, 1)
+	go func() { sealed <- a.Seal(nil, nonce, msg, nil) }()
+	<-entered
+	zeroed := make(chan struct{})
+	go func() {
+		a.Zero()
+		close(zeroed)
+	}()
+	assertBlocked(t, zeroed, release, "Zero")
+	ct := <-sealed
+	pt, err := NewAesGcmAEAD(key).Open(nil, nonce, ct, nil)
+	if err != nil || !bytes.Equal(pt, msg) {
+		t.Fatalf("in-flight Seal did not use the original key: %v", err)
+	}
+	if _, err := a.Open(nil, nonce, ct, nil); err == nil {
+		t.Fatal("Open succeeded after Zero")
+	}
 }

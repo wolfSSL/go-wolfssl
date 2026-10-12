@@ -23,14 +23,22 @@ package handles
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 
 // AesGcmAEAD implements crypto/cipher.AEAD using wolfCrypt AES-256-GCM.
-// Create one with NewAesGcmAEAD.
+// Create one with NewAesGcmAEAD and call Zero when it is no longer needed.
 type AesGcmAEAD struct {
-	key [wolfSSL.AES_256_KEY_SIZE]byte
+	st *aesGcmState
+}
+
+// aesGcmState is shared by copies of an AesGcmAEAD so Zero reaches them all.
+type aesGcmState struct {
+	mu     sync.RWMutex
+	key    [wolfSSL.AES_256_KEY_SIZE]byte
+	zeroed bool
 }
 
 // errAesGcmAuth is returned from Open for any decrypt/verify failure
@@ -40,7 +48,39 @@ var errAesGcmAuth = errors.New("wolfSSL: AES-GCM authentication failed")
 
 // NewAesGcmAEAD returns an AesGcmAEAD keyed with a 32-byte AES-256 key.
 func NewAesGcmAEAD(key [wolfSSL.AES_256_KEY_SIZE]byte) *AesGcmAEAD {
-	return &AesGcmAEAD{key: key}
+	return &AesGcmAEAD{st: &aesGcmState{key: key}}
+}
+
+// Zero wipes the key held by a (best effort: the Go runtime may already have
+// copied it). Zero waits for in-flight Seal and Open calls; afterwards Seal
+// panics and Open fails.
+func (a *AesGcmAEAD) Zero() {
+	st := a.st
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	zeroBytes(st.key[:])
+	st.zeroed = true
+}
+
+// use read-locks the key state for one operation, or returns nil if the
+// AEAD was not built by NewAesGcmAEAD or has been zeroed.
+func (a *AesGcmAEAD) use() *aesGcmState {
+	st := a.st
+	if st == nil {
+		return nil
+	}
+	st.mu.RLock()
+	if st.zeroed {
+		st.mu.RUnlock()
+		return nil
+	}
+	if testHookAcquired != nil {
+		testHookAcquired()
+	}
+	return st
 }
 
 func (a *AesGcmAEAD) NonceSize() int { return wolfSSL.GCM_NONCE_MID_SZ }
@@ -54,6 +94,11 @@ func (a *AesGcmAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
 	if len(nonce) != a.NonceSize() {
 		panic("wolfSSL/handles: incorrect nonce length given to AEAD")
 	}
+	st := a.use()
+	if st == nil {
+		panic("wolfSSL/handles: AEAD used after Zero or without NewAesGcmAEAD")
+	}
+	defer st.mu.RUnlock()
 	aes := wolfSSL.Wc_AesAllocAligned()
 	if aes == nil {
 		panic("wolfSSL/handles: Wc_AesAllocAligned returned nil")
@@ -63,7 +108,7 @@ func (a *AesGcmAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
 		panic(fmt.Sprintf("wolfSSL/handles: wc_AesInit failed: %d", ret))
 	}
 	defer wolfSSL.Wc_AesFree(aes)
-	if ret := wolfSSL.Wc_AesGcmSetKey(aes, a.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
+	if ret := wolfSSL.Wc_AesGcmSetKey(aes, st.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
 		panic(fmt.Sprintf("wolfSSL/handles: wc_AesGcmSetKey failed: %d", ret))
 	}
 
@@ -90,6 +135,11 @@ func (a *AesGcmAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte
 	if len(ciphertext) < a.Overhead() {
 		return nil, errAesGcmAuth
 	}
+	st := a.use()
+	if st == nil {
+		return nil, errAesGcmAuth
+	}
+	defer st.mu.RUnlock()
 	aes := wolfSSL.Wc_AesAllocAligned()
 	if aes == nil {
 		return nil, errAesGcmAuth
@@ -99,7 +149,7 @@ func (a *AesGcmAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte
 		return nil, errAesGcmAuth
 	}
 	defer wolfSSL.Wc_AesFree(aes)
-	if ret := wolfSSL.Wc_AesGcmSetKey(aes, a.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
+	if ret := wolfSSL.Wc_AesGcmSetKey(aes, st.key[:], wolfSSL.AES_256_KEY_SIZE); ret != 0 {
 		return nil, errAesGcmAuth
 	}
 

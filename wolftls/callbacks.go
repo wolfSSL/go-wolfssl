@@ -154,8 +154,42 @@ func getIOConn(id int) *ioConn {
 	return ioConns[id]
 }
 
+// A Go panic must not unwind through wolfSSL's C frames, so each exported
+// callback converts one into the callback's error return.
+
+// transportPanicError replaces a panic from the caller's net.Conn.
+type transportPanicError struct{}
+
+func (transportPanicError) Error() string { return "wolftls: transport panicked" }
+
+// guardTransport runs one transport Read or Write. If it panics, the
+// transport is closed, since it may have moved bytes wolfSSL never saw.
+func guardTransport(c net.Conn, op func() (int, error)) (n int, err error) {
+	panicked := true
+	defer func() {
+		if panicked {
+			recover()
+			closeQuietly(c)
+			n, err = 0, transportPanicError{}
+		}
+	}()
+	n, err = op()
+	panicked = false
+	return n, err
+}
+
+func closeQuietly(c net.Conn) {
+	defer func() { recover() }()
+	c.Close()
+}
+
 //export wolftlsIORecv
-func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) C.int {
+func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) (ret C.int) {
+	ret = C.int(cbioErrGeneral)
+	defer func() { recover() }()
+	if sz < 0 {
+		return C.int(cbioErrGeneral)
+	}
 	connID := int(uintptr(ctx))
 	ic := getIOConn(connID)
 	if ic == nil {
@@ -169,7 +203,7 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 	}
 	var err error
 	if !buffered {
-		n, err = ic.conn.Read(goBuf)
+		n, err = guardTransport(ic.conn, func() (int, error) { return ic.conn.Read(goBuf) })
 	}
 	if n > 0 {
 		C.memcpy(unsafe.Pointer(buf), unsafe.Pointer(&goBuf[0]), C.size_t(n))
@@ -190,7 +224,12 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 }
 
 //export wolftlsIOSend
-func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) C.int {
+func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) (ret C.int) {
+	ret = C.int(cbioErrGeneral)
+	defer func() { recover() }()
+	if sz < 0 {
+		return C.int(cbioErrGeneral)
+	}
 	connID := int(uintptr(ctx))
 	ic := getIOConn(connID)
 	if ic == nil {
@@ -198,7 +237,7 @@ func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 	}
 
 	goBuf := C.GoBytes(unsafe.Pointer(buf), sz)
-	n, err := ic.conn.Write(goBuf)
+	n, err := guardTransport(ic.conn, func() (int, error) { return ic.conn.Write(goBuf) })
 	if n > 0 {
 		return C.int(n)
 	}
@@ -255,7 +294,9 @@ func unregisterSNICallback(id int) {
 }
 
 //export wolftlsSNICallback
-func wolftlsSNICallback(sslPtr unsafe.Pointer, connID C.int) C.int {
+func wolftlsSNICallback(sslPtr unsafe.Pointer, connID C.int) (ret C.int) {
+	ret = 1
+	defer func() { recover() }()
 	ssl := (*wolfSSL.WOLFSSL)(sslPtr)
 	serverName := wolfSSL.WolfSSL_SNI_GetServerName(ssl)
 
@@ -316,7 +357,9 @@ func unregisterCertSetupCallback(id int) {
 }
 
 //export wolftlsCertSetupCallback
-func wolftlsCertSetupCallback(sslPtr unsafe.Pointer, connID C.int) C.int {
+func wolftlsCertSetupCallback(sslPtr unsafe.Pointer, connID C.int) (ret C.int) {
+	ret = 0
+	defer func() { recover() }()
 	ssl := (*wolfSSL.WOLFSSL)(sslPtr)
 	certCbMu.Lock()
 	cb, ok := certCbCallbacks[int(connID)]

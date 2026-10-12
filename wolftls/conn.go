@@ -88,7 +88,7 @@ func (r *recordingConn) takeBuffered(b []byte) (n int, ok bool) {
 
 // fill blocks on the transport and queues what arrives for the recv callback.
 func (r *recordingConn) fill(b []byte) error {
-	n, err := r.Conn.Read(b)
+	n, err := guardTransport(r.Conn, func() (int, error) { return r.Conn.Read(b) })
 	if n > 0 {
 		r.mu.Lock()
 		r.pending = append(r.pending, b[:n]...)

@@ -57,6 +57,15 @@ package wolfx509
 // static void wolfx509_set_basic_const(Cert* cert, int toggle) {
 //     cert->basicConstSet = (toggle != 0);
 // }
+//
+// /* WOLFSSL_CERT_GEN_CACHE keeps the issuer DER and a decoded copy in cert. */
+// static void wolfx509_cert_free_cache(Cert* cert) {
+// #ifdef WOLFSSL_CERT_GEN_CACHE
+//     wc_SetCert_Free(cert);
+// #else
+//     (void)cert;
+// #endif
+// }
 import "C"
 import (
 	"encoding/asn1"
@@ -252,8 +261,11 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 
 	if len(parentDER) > 0 {
+		cParentDER := C.CBytes(parentDER)
+		defer C.free(cParentDER)
+		defer C.wolfx509_cert_free_cache(&cert)
 		if ret := int(C.wc_SetIssuerBuffer(&cert,
-			(*C.byte)(unsafe.Pointer(&parentDER[0])), C.int(len(parentDER)))); ret != 0 {
+			(*C.byte)(cParentDER), C.int(len(parentDER)))); ret != 0 {
 			return nil, fmt.Errorf("wolfCrypt: wc_SetIssuerBuffer: %d", ret)
 		}
 	}

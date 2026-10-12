@@ -876,3 +876,30 @@ func TestReadDistinguishesTruncationFromCloseNotify(t *testing.T) {
 		}
 	})
 }
+
+func TestCloseBeforeHandshake(t *testing.T) {
+	cConn, sConn := net.Pipe()
+	defer sConn.Close()
+	cli := Client(cConn, &Config{ServerName: "localhost", InsecureSkipVerify: true})
+	if err := cli.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	err := callNoPanic(t, func() error {
+		_, err := cli.Read(make([]byte, 16))
+		return err
+	})
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Read after Close: got %v, want net.ErrClosed", err)
+	}
+	err = callNoPanic(t, func() error {
+		_, err := cli.Write([]byte("data"))
+		return err
+	})
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Write after Close: got %v, want net.ErrClosed", err)
+	}
+	if err := callNoPanic(t, cli.Handshake); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Handshake after Close: got %v, want net.ErrClosed", err)
+	}
+}

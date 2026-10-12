@@ -858,6 +858,10 @@ func (c *Conn) Close() error {
 	// (use-after-free in wolfSSL_connect / WolfSSL_get_error).
 	c.handshakeMu.Lock()
 	defer c.handshakeMu.Unlock()
+	if !c.handshakeDone {
+		c.handshakeDone = true
+		c.handshakeErr = net.ErrClosed
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.freeSSLLocked()

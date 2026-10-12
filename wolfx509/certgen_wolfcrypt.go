@@ -72,6 +72,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 	"unsafe"
@@ -181,6 +182,13 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	if signerKey.CRngPtr() == nil {
 		return nil, errors.New("wolfx509: signerKey has no RNG, and cannot sign")
 	}
+	for _, k := range []KeyHandle{pubKey, signerKey} {
+		if lk, ok := k.(interface{ IsLive() bool }); ok && !lk.IsLive() {
+			return nil, errors.New("wolfx509: key has been freed")
+		}
+	}
+	defer runtime.KeepAlive(signerKey)
+	defer runtime.KeepAlive(pubKey)
 	if pubKey.Algorithm() != signerKey.Algorithm() {
 		return nil, fmt.Errorf("wolfx509: pubKey algorithm %d does not match signerKey algorithm %d",
 			pubKey.Algorithm(), signerKey.Algorithm())

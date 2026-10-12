@@ -72,9 +72,9 @@ type Certificate struct {
 	AcmeKeyAuth []byte
 
 	// PublicKey is populated by ParseCertificate from the SPKI when the
-	// algorithm is supported (only AlgECDSAP256 today). Owned by the
-	// Certificate and released in Free(); set by template callers
-	// is ignored by the builder.
+	// algorithm is supported (only AlgECDSAP256 today). Free releases it;
+	// use DetachPublicKey to keep it past Free. Set by template callers is
+	// ignored by the builder.
 	PublicKey KeyHandle
 
 	// mu guards the underlying *WOLFSSL_X509 against use-after-free
@@ -223,16 +223,29 @@ func parseSpkiAsKeyHandle(x *wolfSSL.WOLFSSL_X509) (KeyHandle, bool) {
 // PublicKey. Safe to call multiple times and from multiple goroutines.
 // After Free, Verify returns ErrInvalidCert, but the copied Go-memory
 // fields remain readable.
-func (c *Certificate) Free() {
+func (c *Certificate) Free() { c.release(true) }
+
+// DetachPublicKey removes PublicKey from c and returns it; the caller then
+// owns it and releases it with FreeKey.
+func (c *Certificate) DetachPublicKey() KeyHandle {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := c.PublicKey
+	c.PublicKey = nil
+	c.publicKeyOwned = false
+	return k
+}
+
+func (c *Certificate) release(freeKey bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.x != nil {
 		wolfSSL.WolfSSL_X509_free(c.x)
 		c.x = nil
 	}
-	if c.publicKeyOwned && c.PublicKey != nil {
-		if k, ok := c.PublicKey.(*handles.EccKey); ok {
-			k.Free()
+	if c.publicKeyOwned {
+		if freeKey {
+			FreeKey(c.PublicKey)
 		}
 		c.PublicKey = nil
 		c.publicKeyOwned = false
@@ -240,8 +253,9 @@ func (c *Certificate) Free() {
 	runtime.SetFinalizer(c, nil)
 }
 
-// finalize is the finalizer wrapper (stable method pointer for SetFinalizer).
-func (c *Certificate) finalize() { c.Free() }
+// finalize must not free PublicKey: a caller may still hold it, and it has
+// its own finalizer.
+func (c *Certificate) finalize() { c.release(false) }
 
 // Equal reports whether two certificates are the same on the wire.
 func (c *Certificate) Equal(other *Certificate) bool {

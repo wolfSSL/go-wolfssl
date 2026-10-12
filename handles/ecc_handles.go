@@ -449,8 +449,8 @@ func PublicRawXY(k *EccKey) (x, y []byte, err error) {
 }
 
 // SignDigest signs a pre-computed hash digest and returns an ASN.1-DER
-// encoded ECDSA signature (SEQUENCE { r INTEGER, s INTEGER }). For P-256,
-// the caller must supply a 32-byte digest (SHA-256 output).
+// encoded ECDSA signature (SEQUENCE { r INTEGER, s INTEGER }). Any non-empty
+// digest is accepted; callers must supply the digest their protocol requires.
 //
 // k must carry an RNG (GenerateP256Key or NewEmptyEccKey). Concurrent calls
 // on the same EccKey are serialized by the key's lock.

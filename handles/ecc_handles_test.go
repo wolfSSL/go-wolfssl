@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -524,5 +525,26 @@ func TestParseECPrivateKeyPEMWipesDER(t *testing.T) {
 		if !found {
 			t.Fatal("decoded private-key DER buffer was not wiped")
 		}
+	}
+}
+
+func TestSignDigestRequiresKeyRng(t *testing.T) {
+	priv, _ := eccTestKeyDER(t, 32)
+	k, err := NewEmptyEccPubKey()
+	if err != nil {
+		t.Fatalf("NewEmptyEccPubKey: %v", err)
+	}
+	defer k.Free()
+	idx := 0
+	if ret := wolfSSL.Wc_EccPrivateKeyDecode(priv, &idx, k.Raw(), len(priv)); ret != 0 {
+		t.Fatalf("Wc_EccPrivateKeyDecode: %d", ret)
+	}
+	k.MarkLive()
+	_, err = SignDigest(k, make([]byte, 32))
+	if err == nil {
+		t.Fatal("SignDigest succeeded on a key without an RNG")
+	}
+	if !strings.HasPrefix(err.Error(), "handles:") {
+		t.Fatalf("SignDigest passed a key without an RNG to wolfCrypt: %v", err)
 	}
 }

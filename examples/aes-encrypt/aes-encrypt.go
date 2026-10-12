@@ -236,7 +236,11 @@ func main() {
 
     sizeCheck(&size)
 
-    wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID)
+    ret := wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID)
+    if ret != 0 {
+        fmt.Println("Failed to initialize Aes struct", ret)
+        os.Exit(1)
+    }
     defer wolfSSL.Wc_AesFree(aes)
 
     if operation == "enc" {

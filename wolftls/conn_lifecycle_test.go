@@ -1080,3 +1080,66 @@ func TestHandshakeAbortedByCancelNotReportedAsSuccess(t *testing.T) {
 		t.Fatal("wolfSSL session not released after an aborted handshake")
 	}
 }
+
+func TestHandshakeContextReturnsContextError(t *testing.T) {
+	t.Run("canceled", func(t *testing.T) {
+		cConn, sConn := lifecycleTCPPair(t)
+		defer sConn.Close()
+		cli := Client(cConn, silentServerClientConfig())
+		defer cli.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := cli.HandshakeContext(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		cConn, sConn := lifecycleTCPPair(t)
+		defer sConn.Close()
+		cli := Client(cConn, silentServerClientConfig())
+		defer cli.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := cli.HandshakeContext(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v, want context.DeadlineExceeded", err)
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("deadline cancellation is not classified as a timeout: %v", err)
+		}
+	})
+}
+
+var errVerifySentinel = errors.New("verify sentinel")
+
+func TestHandshakeContextKeepsHandshakeError(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kicked := make(chan struct{})
+	kc := &kickHookConn{Conn: cConn, onKick: func() { close(kicked) }}
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		cancel()
+		select {
+		case <-kicked:
+		case <-time.After(lifecycleTimeout):
+		}
+		return errVerifySentinel
+	}
+	cli := Client(kc, cfg)
+	defer cli.Close()
+
+	err := cli.HandshakeContext(ctx)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, errVerifySentinel) {
+		t.Fatalf("got %v, want both context.Canceled and the callback error", err)
+	}
+}

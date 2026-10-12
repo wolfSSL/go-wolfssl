@@ -318,12 +318,29 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 		if conn != nil {
 			conn.SetDeadline(time.Time{})
 		}
-		if err == nil {
-			err = ctx.Err()
+		if err != nil {
+			return &canceledHandshakeError{ctxErr: ctx.Err(), err: err}
 		}
-		return err
+		return ctx.Err()
 	}
 }
+
+// canceledHandshakeError reports a canceled HandshakeContext while keeping
+// both the context error and the handshake error visible to errors.Is/As.
+type canceledHandshakeError struct {
+	ctxErr error
+	err    error
+}
+
+func (e *canceledHandshakeError) Error() string {
+	return e.ctxErr.Error() + ": " + e.err.Error()
+}
+
+func (e *canceledHandshakeError) Is(target error) bool { return target == e.ctxErr }
+
+func (e *canceledHandshakeError) As(target interface{}) bool { return errors.As(e.ctxErr, target) }
+
+func (e *canceledHandshakeError) Unwrap() error { return e.err }
 
 // doHandshake performs the actual handshake. Must be called with handshakeMu held.
 func (c *Conn) doHandshake() error {

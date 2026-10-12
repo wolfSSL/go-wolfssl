@@ -26,6 +26,7 @@ package wolfSSL
 // #include <wolfssl/wolfcrypt/asn_public.h>
 // #include <wolfssl/wolfcrypt/hash.h>
 // #include <wolfssl/wolfcrypt/types.h>
+// #include <wolfssl/wolfcrypt/error-crypt.h>
 // #ifdef NO_RSA
 // typedef struct RsaKey {} RsaKey;
 // int wc_InitRsaKey(RsaKey* key, void* heap) { (void)key; (void)heap; return -174; }
@@ -86,6 +87,23 @@ package wolfSSL
 //     return -174;
 // }
 // #endif
+// static int wc_EncodeSignature_Bounded(byte* out, word32 outSz,
+//                                       const byte* digest, word32 digSz,
+//                                       int hashOID)
+// {
+//     byte tmp[MAX_DER_DIGEST_SZ];
+//     word32 sz;
+//     if (digSz > WC_MAX_DIGEST_SIZE ||
+//         digSz > sizeof(tmp) - MAX_DER_DIGEST_ASN_SZ)
+//         return BAD_FUNC_ARG;
+//     sz = wc_EncodeSignature(tmp, digest, digSz, hashOID);
+//     if (sz == 0)
+//         return 0;
+//     if (sz > outSz)
+//         return BAD_FUNC_ARG;
+//     XMEMCPY(out, tmp, sz);
+//     return (int)sz;
+// }
 import "C"
 import "unsafe"
 
@@ -173,8 +191,15 @@ func Wc_EncodeSignature(out []byte, digest []byte, hashOID int) int {
     if len(out) == 0 || len(digest) == 0 {
         return BAD_FUNC_ARG
     }
-    return int(C.wc_EncodeSignature(
-        (*C.byte)(unsafe.Pointer(&out[0])),
+    if len(digest) > int(C.WC_MAX_DIGEST_SIZE) {
+        return BAD_FUNC_ARG
+    }
+    outSz := len(out)
+    if outSz > int(C.MAX_DER_DIGEST_SZ) {
+        outSz = int(C.MAX_DER_DIGEST_SZ)
+    }
+    return int(C.wc_EncodeSignature_Bounded(
+        (*C.byte)(unsafe.Pointer(&out[0])), C.word32(outSz),
         (*C.byte)(unsafe.Pointer(&digest[0])), C.word32(len(digest)),
         C.int(hashOID)))
 }

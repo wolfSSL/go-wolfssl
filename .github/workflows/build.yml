@@ -124,6 +124,9 @@ jobs:
       - name: Run wolfx509 tests (full config)
         run: go test ./wolfx509
 
+      - name: Run root package tests (full config)
+        run: go test .
+
       # ---- Default-config phase: validate the #ifdef stub paths against
       # a plain ./configure wolfSSL
       - name: Install wolfSSL (default config) system-wide
@@ -146,6 +149,9 @@ jobs:
 
       - name: Run go vet (default config)
         run: go vet .
+
+      - name: Run root package tests (default config)
+        run: go test .
 
       - name: Run handles tests (default config)
         run: go test ./handles

@@ -663,7 +663,7 @@ func (c *Conn) Read(b []byte) (int, error) {
 	n, errCode := c.readRecord(b)
 	for n <= 0 && c.sslMu != nil && rc != nil && errCode == sslErrorWantRead {
 		if err := c.pumpInput(rc, gen); err != nil {
-			return 0, err
+			return 0, unexpectedEOF(err)
 		}
 		gen = rc.fillCount()
 		n, errCode = c.readRecord(b)
@@ -671,16 +671,29 @@ func (c *Conn) Read(b []byte) (int, error) {
 	if n > 0 {
 		return n, nil
 	}
+	// Only an authenticated close_notify ends the stream cleanly.
+	if errCode == sslErrorZeroReturn {
+		return 0, io.EOF
+	}
 	if rc != nil {
 		if e := rc.takeLastReadErr(); e != nil {
-			return 0, e
+			return 0, unexpectedEOF(e)
 		}
 	}
 	if n == 0 {
-		return 0, io.EOF
+		return 0, io.ErrUnexpectedEOF
 	}
 	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 	return 0, fmt.Errorf("wolftls: read error: %s (%d)", errMsg, errCode)
+}
+
+// unexpectedEOF maps a transport EOF seen before close_notify to
+// io.ErrUnexpectedEOF so a truncated stream is not mistaken for a clean end.
+func unexpectedEOF(err error) error {
+	if errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 // pumpInput waits for more transport input for the shared session, unless

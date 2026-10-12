@@ -775,8 +775,8 @@ func TestWriteTimeoutKeepsStreamConsistent(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("server stream differs from the bytes Write reported as written")
 	}
-	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil {
-		t.Fatalf("after the reported bytes: n=%d err=%v, want the stream to end", n, err)
+	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil || err == io.EOF {
+		t.Fatalf("after the reported bytes: n=%d err=%v, want a truncation error", n, err)
 	}
 }
 
@@ -843,4 +843,36 @@ func TestReadErrorComesFromCurrentCall(t *testing.T) {
 	if _, err := cli.Read(buf); !errors.Is(err, errAfterData) {
 		t.Fatalf("next Read: got %v, want the transport error returned with the data", err)
 	}
+}
+
+func TestReadDistinguishesTruncationFromCloseNotify(t *testing.T) {
+	t.Run("transport closed without close_notify", func(t *testing.T) {
+		cli, srv, cleanup := setupPair(t)
+		defer cleanup()
+		srv.NetConn().Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v, want io.ErrUnexpectedEOF", err)
+		}
+	})
+
+	t.Run("wrapped transport EOF", func(t *testing.T) {
+		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return wrapErrConn{c} })
+		defer cleanup()
+		srv.NetConn().Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v, want io.ErrUnexpectedEOF", err)
+		}
+	})
+
+	t.Run("close_notify", func(t *testing.T) {
+		cli, srv, cleanup := setupPair(t)
+		defer cleanup()
+		srv.Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.EOF {
+			t.Fatalf("got %v, want io.EOF", err)
+		}
+	})
 }

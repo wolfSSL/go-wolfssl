@@ -128,8 +128,9 @@ const (
 )
 
 const (
-	sslErrorWantRead  = int(C.WOLFSSL_ERROR_WANT_READ)
-	sslErrorWantWrite = int(C.WOLFSSL_ERROR_WANT_WRITE)
+	sslErrorWantRead   = int(C.WOLFSSL_ERROR_WANT_READ)
+	sslErrorWantWrite  = int(C.WOLFSSL_ERROR_WANT_WRITE)
+	sslErrorZeroReturn = int(C.WOLFSSL_ERROR_ZERO_RETURN)
 )
 
 // ------------------------------------------------------------------
@@ -223,7 +224,7 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 		return C.int(n)
 	}
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return C.int(cbioErrConnClose)
 		}
 		// Hitting the user set deadline for the read has no implication

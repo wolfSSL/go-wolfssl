@@ -133,6 +133,7 @@ package wolfSSL
 // #endif
 import "C"
 import (
+    "math"
     "unsafe"
 )
 
@@ -399,12 +400,14 @@ func WolfSSL_CTX_use_PrivateKey_buffer(ctx *C.struct_WOLFSSL_CTX, buf []byte,
 
 func WolfSSL_UseSNI(ssl *C.struct_WOLFSSL, sniType int, data []byte, size int) int {
     if size <= 0 || size > len(data) || len(data) == 0 { return BAD_FUNC_ARG }
+    if size > math.MaxUint16 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_UseSNI(ssl, C.uchar(sniType),
                unsafe.Pointer(&data[0]), C.ushort(size)))
 }
 
 func WolfSSL_CTX_UseSNI(ctx *C.struct_WOLFSSL_CTX, sniType int, data []byte, size int) int {
     if size <= 0 || size > len(data) || len(data) == 0 { return BAD_FUNC_ARG }
+    if size > math.MaxUint16 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_CTX_UseSNI(ctx, C.uchar(sniType),
                unsafe.Pointer(&data[0]), C.ushort(size)))
 }
@@ -416,6 +419,7 @@ func WolfSSL_check_domain_name(ssl *C.struct_WOLFSSL, dn string) int {
 }
 
 func WolfSSL_UseALPN(ssl *C.struct_WOLFSSL, protoList string, options int) int {
+    if uint64(len(protoList)) > math.MaxUint32 { return BAD_FUNC_ARG }
     c_list := C.CString(protoList)
     defer C.free(unsafe.Pointer(c_list))
     return int(C.wolfSSL_UseALPN(ssl, c_list, C.uint(len(protoList)), C.uchar(options)))

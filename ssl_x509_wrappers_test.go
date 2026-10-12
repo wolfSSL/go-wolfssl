@@ -280,3 +280,17 @@ func TestProtoVersionConstantsAccepted(t *testing.T) {
         t.Fatalf("set_max_proto_version(WOLFSSL_TLSV1_3) = %d", ret)
     }
 }
+
+func TestUseSNIRejectsOversizedName(t *testing.T) {
+    p := newTLSTestPair(t)
+    name := make([]byte, 0x10000+3)
+    for i := range name {
+        name[i] = 'a'
+    }
+    if ret := WolfSSL_UseSNI(p.cli, WOLFSSL_SNI_HOST_NAME, name, len(name)); ret != BAD_FUNC_ARG {
+        t.Fatalf("WolfSSL_UseSNI with %d-byte name = %d, want BAD_FUNC_ARG", len(name), ret)
+    }
+    if ret := WolfSSL_CTX_UseSNI(p.cliCtx, WOLFSSL_SNI_HOST_NAME, name, len(name)); ret != BAD_FUNC_ARG {
+        t.Fatalf("WolfSSL_CTX_UseSNI with %d-byte name = %d, want BAD_FUNC_ARG", len(name), ret)
+    }
+}

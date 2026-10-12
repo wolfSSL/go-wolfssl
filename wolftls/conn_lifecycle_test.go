@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1291,5 +1292,19 @@ func TestFinalizerDoesNoTransportIO(t *testing.T) {
 	atomic.StoreInt32(&cc.armed, 0)
 	if w, d := atomic.LoadInt32(&cc.writes), atomic.LoadInt32(&cc.resets); w != 0 || d != 0 {
 		t.Fatalf("finalizer touched the transport: %d writes, %d deadline changes", w, d)
+	}
+}
+
+// CI sets WOLFTLS_EXPECT_WRITE_DUP so each build is known to run the
+// session layout it was configured for.
+func TestWriteDupLayoutMatchesBuild(t *testing.T) {
+	want := os.Getenv("WOLFTLS_EXPECT_WRITE_DUP")
+	if want == "" {
+		t.Skip("WOLFTLS_EXPECT_WRITE_DUP not set")
+	}
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	if split := cli.sslWrite != cli.ssl; split != (want == "1") {
+		t.Fatalf("separate write session = %v, WOLFTLS_EXPECT_WRITE_DUP = %s", split, want)
 	}
 }

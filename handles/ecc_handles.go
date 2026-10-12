@@ -130,8 +130,9 @@ func NewEmptyEccPubKey() (*EccKey, error) {
 
 // MarkLive flags the key as fully populated. Higher-level parse helpers call
 // this once they have successfully filled the underlying ecc_key from a DER
-// or PEM blob. After MarkLive the key is usable for signing/verification.
-// MarkLive also records the key's curve for Algorithm.
+// or PEM blob. After MarkLive the key is usable for verification; signing
+// also needs private key material and the RNG that only NewEmptyEccKey and
+// GenerateP256Key set up. MarkLive also records the key's curve for Algorithm.
 func (k *EccKey) MarkLive() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -175,8 +176,8 @@ func eccKeyAlgorithm(key *wolfSSL.Ecc_key) (Algorithm, int) {
 }
 
 // IsLive reports whether the key has been generated or successfully parsed
-// (i.e. usable for signing/verification operations) and not yet freed.
-// The result is stable only while Lock is held.
+// and not yet freed. A live key from NewEmptyEccPubKey has no RNG and
+// cannot sign. The result is stable only while Lock is held.
 func (k *EccKey) IsLive() bool {
 	return k != nil && atomic.LoadInt32(&k.live) == 1
 }
@@ -451,13 +452,17 @@ func PublicRawXY(k *EccKey) (x, y []byte, err error) {
 // encoded ECDSA signature (SEQUENCE { r INTEGER, s INTEGER }). For P-256,
 // the caller must supply a 32-byte digest (SHA-256 output).
 //
-// Concurrent calls on the same EccKey are serialized by the key's lock.
+// k must carry an RNG (GenerateP256Key or NewEmptyEccKey). Concurrent calls
+// on the same EccKey are serialized by the key's lock.
 func SignDigest(k *EccKey, digest []byte) ([]byte, error) {
 	unlock := k.acquire()
 	if unlock == nil {
 		return nil, errors.New("handles: EccKey is not live")
 	}
 	defer unlock()
+	if atomic.LoadInt32(&k.hasRng) == 0 {
+		return nil, errors.New("handles: SignDigest: EccKey has no RNG")
+	}
 	if len(digest) == 0 {
 		return nil, errors.New("handles: SignDigest: empty digest")
 	}

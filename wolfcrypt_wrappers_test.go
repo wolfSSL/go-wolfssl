@@ -583,3 +583,18 @@ func TestRngGenerateBlockRejectsOversizedLength(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestSha256UpdateRejectsOversizedLength(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	sha := new(Wc_Sha256)
+	if ret := Wc_InitSha256_ex(sha, nil, INVALID_DEVID); ret == notCompiledE {
+		t.Skip("SHA-256 not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_InitSha256_ex: %d", ret)
+	}
+	defer Wc_Sha256Free(sha)
+	if ret := Wc_Sha256Update(sha, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

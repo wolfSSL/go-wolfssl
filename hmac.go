@@ -126,6 +126,10 @@ func Wc_HKDF(hashType int, inputKey []byte, inputKeySz int, salt []byte,
     if infoSz < 0 || infoSz > len(info) { return BAD_FUNC_ARG }
     if outSz < 0 || outSz > len(out) { return BAD_FUNC_ARG }
     if len(out) == 0 { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(inputKeySz) || !wolfcryptFitsWord32(saltSz) ||
+       !wolfcryptFitsWord32(infoSz) || !wolfcryptFitsWord32(outSz) {
+        return BAD_FUNC_ARG
+    }
     // RFC 5869 permits a zero-length IKM (the Noise protocol's final
     // Split() step relies on this, passing ck as salt and "" as IKM).
     // Pass a NULL pointer to wolfCrypt rather than indexing an empty slice.

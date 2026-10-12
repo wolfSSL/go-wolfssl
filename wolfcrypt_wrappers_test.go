@@ -784,3 +784,32 @@ func TestHmacSetKeyRejectsOversizedKey(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestHKDFRejectsOversizedLengths(t *testing.T) {
+	skipWithoutSha256(t)
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	ikm := bytes.Repeat([]byte{0x0b}, 22)
+	salt := bytes.Repeat([]byte{0x5a}, 32)
+	info := []byte("info")
+	out := make([]byte, 32)
+	if ret := Wc_HKDF(WC_SHA256, ikm, len(ikm), salt, len(salt), info, len(info), out, len(out)); ret == notCompiledE {
+		t.Skip("HKDF not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_HKDF: %d", ret)
+	}
+	cases := []struct {
+		name string
+		ret  int
+	}{
+		{"ikm", Wc_HKDF(WC_SHA256, huge, len(huge), salt, len(salt), info, len(info), out, len(out))},
+		{"salt", Wc_HKDF(WC_SHA256, ikm, len(ikm), huge, len(huge), info, len(info), out, len(out))},
+		{"info", Wc_HKDF(WC_SHA256, ikm, len(ikm), salt, len(salt), huge, len(huge), out, len(out))},
+		{"out", Wc_HKDF(WC_SHA256, ikm, len(ikm), salt, len(salt), info, len(info), huge, len(huge))},
+	}
+	for _, c := range cases {
+		if c.ret != BAD_FUNC_ARG {
+			t.Errorf("oversized %s: got %d, want %d", c.name, c.ret, BAD_FUNC_ARG)
+		}
+	}
+}

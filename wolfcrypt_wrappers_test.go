@@ -612,3 +612,36 @@ func TestBlake2sUpdateRejectsOversizedLength(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func newTestHmac(t *testing.T) *Hmac {
+	t.Helper()
+	hmac := Wc_HmacAllocAligned()
+	if hmac == nil {
+		t.Fatal("Wc_HmacAllocAligned failed")
+	}
+	if ret := Wc_HmacInit(hmac, nil, INVALID_DEVID); ret != 0 {
+		Wc_HmacFreeAllocAligned(hmac)
+		t.Fatalf("Wc_HmacInit: %d", ret)
+	}
+	return hmac
+}
+
+func freeTestHmac(hmac *Hmac) {
+	Wc_HmacFree(hmac)
+	Wc_HmacFreeAllocAligned(hmac)
+}
+
+func TestHmacUpdateRejectsOversizedLength(t *testing.T) {
+	skipWithoutSha256(t)
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	hmac := newTestHmac(t)
+	defer freeTestHmac(hmac)
+	key := []byte("hmac key long enough for fips mode")
+	if ret := Wc_HmacSetKey(hmac, WC_SHA256, key, len(key)); ret != 0 {
+		t.Fatalf("Wc_HmacSetKey: %d", ret)
+	}
+	if ret := Wc_HmacUpdate(hmac, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

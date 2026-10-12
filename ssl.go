@@ -48,6 +48,11 @@ package wolfSSL
 // #endif
 // #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_ALL)
 // void wolfSSL_OPENSSL_free(void* p) { free(p); }
+// #endif
+// /* Same condition under which libwolfssl omits wolfSSL_X509_free. */
+// #if !defined(KEEP_PEER_CERT) && !defined(SESSION_CERTS) && \
+//     !defined(KEEP_OUR_CERT) && !defined(OPENSSL_EXTRA) && \
+//     !defined(OPENSSL_EXTRA_X509_SMALL) && !defined(OPENSSL_ALL)
 // void wolfSSL_X509_free(WOLFSSL_X509* x509) { (void)x509; }
 // #endif
 // #ifdef NO_PSK

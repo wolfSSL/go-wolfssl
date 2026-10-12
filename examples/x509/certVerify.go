@@ -42,6 +42,7 @@ func loadX509(certData []byte) *wolfSSL.WOLFSSL_X509 {
 
 func main() {
 	wolfSSL.WolfSSL_Init()
+	defer wolfSSL.WolfSSL_Cleanup()
 
 	caPath   := "../certs/ca-cert.pem"
 	int1Path := "../certs/ca-int-cert.pem"
@@ -73,6 +74,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error converting one or more certificates to wolfSSL X509")
 		os.Exit(1)
 	}
+	// The intermediate stack does not own its certs; these run after the stack and ctx frees
+	defer wolfSSL.WolfSSL_X509_free(x509Int1)
+	defer wolfSSL.WolfSSL_X509_free(x509Int2)
+	defer wolfSSL.WolfSSL_X509_free(x509Leaf)
 
 	// Create store and load CA file
 	store := wolfSSL.WolfSSL_X509_STORE_new()
@@ -118,7 +123,5 @@ func main() {
 	}
 
 	fmt.Println("Certificate chain verified successfully.")
-
-	wolfSSL.WolfSSL_Cleanup()
 }
 

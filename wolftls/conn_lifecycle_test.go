@@ -1253,3 +1253,43 @@ func TestAbortedHandshakeStateNotPublished(t *testing.T) {
 		t.Fatal("ConnectionState reports an aborted handshake as complete")
 	}
 }
+
+// transportUseCounter counts transport writes and deadline changes while armed.
+type transportUseCounter struct {
+	net.Conn
+	armed  int32
+	writes int32
+	resets int32
+}
+
+func (c *transportUseCounter) count(n *int32) {
+	if atomic.LoadInt32(&c.armed) == 1 {
+		atomic.AddInt32(n, 1)
+	}
+}
+
+func (c *transportUseCounter) Write(b []byte) (int, error) {
+	c.count(&c.writes)
+	return c.Conn.Write(b)
+}
+
+func (c *transportUseCounter) SetDeadline(t time.Time) error {
+	c.count(&c.resets)
+	return c.Conn.SetDeadline(t)
+}
+
+func TestFinalizerDoesNoTransportIO(t *testing.T) {
+	var cc *transportUseCounter
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		cc = &transportUseCounter{Conn: c}
+		return cc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&cc.armed, 1)
+	cli.finalize()
+	atomic.StoreInt32(&cc.armed, 0)
+	if w, d := atomic.LoadInt32(&cc.writes), atomic.LoadInt32(&cc.resets); w != 0 || d != 0 {
+		t.Fatalf("finalizer touched the transport: %d writes, %d deadline changes", w, d)
+	}
+}

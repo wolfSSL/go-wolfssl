@@ -260,7 +260,13 @@ func newConn(conn net.Conn, config *Config, isClient bool) *Conn {
 	return c
 }
 
-func (c *Conn) finalize() { c.freeSSL() }
+// finalize frees wolfSSL state without a TLS shutdown: finalizers run on a
+// single goroutine and must not block on, or write to, the transport.
+func (c *Conn) finalize() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseSSLLocked()
+}
 
 // Handshake performs the TLS handshake if it has not already been performed.
 // It is safe to call concurrently; only the first call performs the handshake.
@@ -1042,6 +1048,14 @@ func (c *Conn) freeSSLLocked() {
 		if c.conn != nil {
 			c.conn.SetDeadline(time.Time{}) // clear deadline
 		}
+	}
+	c.releaseSSLLocked()
+}
+
+// releaseSSLLocked frees the wolfSSL session, CTX, and I/O registration
+// without any transport I/O. c.mu must be held for writing.
+func (c *Conn) releaseSSLLocked() {
+	if c.ssl != nil {
 		if c.sslWrite != nil && c.sslWrite != c.ssl {
 			wolfSSL.WolfSSL_free(c.sslWrite)
 		}

@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client-dtls.go
  *
  * Copyright (C) 2006-2023 wolfSSL Inc.

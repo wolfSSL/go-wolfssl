@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* server.go
  *
  * Copyright (C) 2006-2022 wolfSSL Inc.

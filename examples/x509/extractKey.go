@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* extractKey.go
  *
  * Copyright (C) 2006-2025 wolfSSL Inc.

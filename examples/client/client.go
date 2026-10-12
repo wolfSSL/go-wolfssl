@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client.go
  *
  * Copyright (C) 2006-2022 wolfSSL Inc.

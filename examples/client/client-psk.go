@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client-psk.go
  *
  * Copyright (C) 2006-2023 wolfSSL Inc.

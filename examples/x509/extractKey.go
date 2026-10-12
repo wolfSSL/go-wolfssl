@@ -42,6 +42,7 @@ func loadX509(certData []byte) *wolfSSL.WOLFSSL_X509 {
 
 func main() {
 	wolfSSL.WolfSSL_Init()
+	defer wolfSSL.WolfSSL_Cleanup()
 
 	leafPath := "../certs/server-ecc.pem"
 
@@ -58,6 +59,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error converting one or more certificates to wolfSSL X509")
 		os.Exit(1)
 	}
+	defer wolfSSL.WolfSSL_X509_free(x509Leaf)
 
 	// First call to get required buffer size
 	var pubLen int
@@ -99,7 +101,5 @@ func main() {
 	fmt.Println("Successfully imported ECC public key structure from DER buffer")
         
 	wolfSSL.Wc_ecc_free(&pubKey)
-
-	wolfSSL.WolfSSL_Cleanup()
 }
 

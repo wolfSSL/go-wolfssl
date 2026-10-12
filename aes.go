@@ -163,7 +163,8 @@ func Wc_AesFreeAllocAligned(aes *C.struct_Aes) {
 }
 
 func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) int {
-        /* TODO: HANDLE NON NIL HEAP */
+    /* a Go slice cannot serve as a wolfCrypt heap hint */
+    if heap != nil { return BAD_FUNC_ARG }
     return int(C.wc_AesInit(aes, unsafe.Pointer(nil), C.int(devId)))
 }
 

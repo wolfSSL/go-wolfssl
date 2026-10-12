@@ -898,3 +898,21 @@ func TestBlake2sHmacLeavesTrailingOutputUntouched(t *testing.T) {
 		}
 	}
 }
+
+func TestAesInitRejectsGoHeapHint(t *testing.T) {
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, []byte{0}, INVALID_DEVID); ret != BAD_FUNC_ARG {
+		if ret == 0 {
+			Wc_AesFree(aes)
+		}
+		t.Fatalf("non-nil heap: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("nil heap: %d", ret)
+	}
+	Wc_AesFree(aes)
+}

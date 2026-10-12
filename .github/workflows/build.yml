@@ -107,9 +107,8 @@ jobs:
       - name: Build examples
         run: |
           # Each example dir has multiple main packages, so build each .go file individually
-          # Note: server-dtls.go is excluded due to pre-existing unused variable error on master
           for f in examples/client/client.go examples/client/client-dtls.go examples/client/client-psk.go \
-                   examples/server/server.go examples/server/server-psk.go \
+                   examples/server/server.go examples/server/server-psk.go examples/server/server-dtls.go \
                    examples/aes-encrypt/aes-encrypt.go \
                    examples/ecc-sign-verify/ecc-sign-verify.go \
                    examples/hash/fileHash.go \

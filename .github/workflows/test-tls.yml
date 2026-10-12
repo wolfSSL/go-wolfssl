@@ -157,6 +157,29 @@ jobs:
             /tmp/$t
           done
 
+      - name: Build DTLS server and client
+        run: |
+          (cd examples/server && go build -o dtls-server server-dtls.go)
+          (cd examples/client && go build -o dtls-client client-dtls.go)
+
+      - name: Test DTLS handshake
+        run: |
+          (cd examples/server && ./dtls-server) &
+          SERVER_PID=$!
+          sleep 1
+
+          OUTPUT=$(cd examples/client && timeout 5 ./dtls-client 2>&1) || true
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if echo "$OUTPUT" | grep -q "Server says"; then
+            echo "DTLS handshake succeeded"
+          else
+            echo "DTLS handshake failed"
+            exit 1
+          fi
+
       - name: Build crypto examples
         run: |
           go build examples/hash/fileHash.go

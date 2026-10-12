@@ -865,12 +865,12 @@ func TestGetCertificate(t *testing.T) {
 		t.Fatalf("got %q, want %q", buf[:n], "hello")
 	}
 
-	if !callbackCalled {
-		t.Fatal("GetCertificate was not called")
-	}
-
 	if err := <-errc; err != nil {
 		t.Fatalf("server: %v", err)
+	}
+
+	if !callbackCalled {
+		t.Fatal("GetCertificate was not called")
 	}
 }
 

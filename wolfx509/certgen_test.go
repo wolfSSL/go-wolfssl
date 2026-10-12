@@ -659,3 +659,23 @@ func TestCreateCertificateEmailSANs(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateCertificateRejectsNonPositiveSerial(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	for _, serial := range []*big.Int{big.NewInt(0), big.NewInt(-5)} {
+		tmpl := &Certificate{
+			SerialNumber: serial,
+			Subject:      Name{CommonName: "serial"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted serial %v", serial)
+		}
+	}
+}

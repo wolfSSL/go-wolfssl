@@ -69,6 +69,9 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 
 	var serial []byte
 	if template.SerialNumber != nil {
+		if template.SerialNumber.Sign() <= 0 {
+			return nil, errors.New("wolfx509: SerialNumber must be positive")
+		}
 		serial = template.SerialNumber.Bytes()
 	}
 

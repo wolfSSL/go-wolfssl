@@ -153,6 +153,10 @@ const clockSkewBackdate = 24 * time.Hour
 const (
 	minASN1Year = 1
 	maxASN1Year = 9999
+
+	// maxValidDays bounds ValidDays so date arithmetic cannot overflow; the
+	// year check below still rejects anything past maxASN1Year.
+	maxValidDays = (maxASN1Year + 1) * 366
 )
 
 // resolveValidity determines the appropriate notBefore and notAfter time values
@@ -178,6 +182,9 @@ func resolveValidity(notBefore, notAfter time.Time, validDays int) (time.Time, t
 	if notAfter.IsZero() && !notBefore.IsZero() {
 		return time.Time{}, time.Time{}, errors.New("wolfx509: NotBefore requires NotAfter; ValidDays is measured from issuance, not from NotBefore")
 	}
+	if validDays > maxValidDays {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: ValidDays (%d) exceeds the encodable range", validDays)
+	}
 
 	now := time.Now()
 	nb, na := notBefore, notAfter
@@ -185,7 +192,7 @@ func resolveValidity(notBefore, notAfter time.Time, validDays int) (time.Time, t
 		nb = now.Add(-clockSkewBackdate)
 	}
 	if na.IsZero() {
-		na = now.Add(time.Duration(validDays) * 24 * time.Hour)
+		na = now.UTC().AddDate(0, 0, validDays)
 	}
 
 	base := notBefore

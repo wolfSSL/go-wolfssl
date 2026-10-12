@@ -402,6 +402,26 @@ func TestResolveValidity(t *testing.T) {
 	}
 }
 
+func TestResolveValidityLargeValidDays(t *testing.T) {
+	// Both exceed time.Duration's ~292-year range but stay below year 9999.
+	for _, days := range []int{106752, 213504} {
+		lo := time.Now().UTC()
+		_, na, err := resolveValidity(time.Time{}, time.Time{}, days)
+		if err != nil {
+			t.Errorf("ValidDays=%d: unexpected error %v", days, err)
+			continue
+		}
+		if want := lo.AddDate(0, 0, days-1); na.Before(want) {
+			t.Errorf("ValidDays=%d: NotAfter = %s, want after %s", days, na, want)
+		}
+	}
+	for _, days := range []int{maxValidDays + 1, int(^uint(0) >> 1)} {
+		if _, na, err := resolveValidity(time.Time{}, time.Time{}, days); err == nil {
+			t.Errorf("ValidDays=%d: NotAfter = %s, want error", days, na)
+		}
+	}
+}
+
 func TestEncodeValidityTime(t *testing.T) {
 	cases := []struct {
 		name string

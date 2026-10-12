@@ -35,8 +35,8 @@ const (
 )
 
 func main() {
-    /* Client Certificate path */
-    CERT_FILE := "../certs/ca-cert.pem"
+    /* CA certificate used to verify the server */
+    CA_CERT_FILE := "../certs/ca-cert.pem"
 
     /* Initialize wolfSSL */
     wolfSSL.WolfSSL_Init()
@@ -48,10 +48,10 @@ func main() {
         os.Exit(1)
     }
 
-    /* Load client certificate into WOLFSSL_CTX */
-    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CERT_FILE, nil)
+    /* Load trusted CA certificate for server verification */
+    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CA_CERT_FILE, nil)
     if ret != wolfSSL.WOLFSSL_SUCCESS {
-        fmt.Println("Failed to load ", CERT_FILE);
+        fmt.Println("Failed to load ", CA_CERT_FILE);
         os.Exit(1)
     }
 

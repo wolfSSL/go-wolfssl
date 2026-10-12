@@ -376,8 +376,8 @@ func (c *Conn) doHandshake() error {
 		return errors.New("wolftls: failed to create WOLFSSL session")
 	}
 
-	// Set SNI
-	if c.config.ServerName != "" {
+	// Set SNI; RFC 6066 forbids IP literals in it
+	if c.config.ServerName != "" && serverNameIP(c.config.ServerName) == nil {
 		sniData := []byte(c.config.ServerName)
 		ret := wolfSSL.WolfSSL_UseSNI(c.ssl, wolfSSL.WOLFSSL_SNI_HOST_NAME,
 			sniData, len(sniData))
@@ -472,8 +472,10 @@ func (c *Conn) cleanup() {
 // buildConnectionState populates c.connState from the wolfSSL session.
 func (c *Conn) buildConnectionState() error {
 	if c.isClient {
-		// Client: SNI is what we sent; mirror the value from config.
-		c.connState.ServerName = c.config.ServerName
+		// Client: SNI is what we sent; IP literals are never sent.
+		if serverNameIP(c.config.ServerName) == nil {
+			c.connState.ServerName = c.config.ServerName
+		}
 	} else {
 		// Server: SNI is what the client sent in its ClientHello; query
 		// the wolfSSL session. Required for server-side dispatch logic

@@ -406,3 +406,23 @@ func TestExplicitMinVersionKeepsLegacyTLS(t *testing.T) {
 		t.Fatalf("negotiated 0x%x, want TLS 1.1", res.client.Version)
 	}
 }
+
+func TestIPServerNameNotSentAsSNI(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	for _, name := range []string{"127.0.0.1", "::1", "[::1]"} {
+		t.Run(name, func(t *testing.T) {
+			serverCfg := &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}}
+			res := runHandshake(t, serverCfg, &Config{ServerName: name, InsecureSkipVerify: true})
+			if res.clientErr != nil || res.serverErr != nil {
+				t.Fatalf("handshake: client %v, server %v", res.clientErr, res.serverErr)
+			}
+			if res.server.ServerName != "" {
+				t.Fatalf("server received SNI %q for an IP literal", res.server.ServerName)
+			}
+			if res.client.ServerName != "" {
+				t.Fatalf("client reports SNI %q for an IP literal", res.client.ServerName)
+			}
+		})
+	}
+}

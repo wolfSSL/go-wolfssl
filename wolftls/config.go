@@ -41,6 +41,7 @@ import "C"
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"unsafe"
 
@@ -101,7 +102,8 @@ type Certificate struct {
 // Config structures a TLS connection's parameters.
 type Config struct {
 	// ServerName is the value sent in the SNI extension and, for clients, is
-	// used for hostname verification. A client that verifies the peer
+	// used for hostname verification. An IP literal (optionally bracketed,
+	// IPv6 may carry a zone) is not sent in SNI. A client that verifies the peer
 	// (InsecureSkipVerify == false) must set ServerName: otherwise the
 	// certificate name is never checked, so doHandshake rejects the connection
 	// before the handshake, matching crypto/tls. Set InsecureSkipVerify to
@@ -217,6 +219,18 @@ func (c *Config) Clone() *Config {
 // It uses the native setter, which builds without OPENSSL_EXTRA also have.
 func setDefaultMinVersion(ctx *wolfSSL.WOLFSSL_CTX) int {
 	return int(C.wolftls_set_default_min_version((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx))))
+}
+
+// serverNameIP returns the address when ServerName is an IP literal
+// (optionally bracketed or with an IPv6 zone), or nil for a host name.
+func serverNameIP(name string) net.IP {
+	if len(name) >= 2 && name[0] == '[' && name[len(name)-1] == ']' {
+		name = name[1 : len(name)-1]
+	}
+	if i := strings.LastIndexByte(name, '%'); i > 0 {
+		name = name[:i]
+	}
+	return net.ParseIP(name)
 }
 
 // checkNextProtos rejects ALPN names that cannot be passed through

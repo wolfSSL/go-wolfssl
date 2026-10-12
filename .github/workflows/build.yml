@@ -71,9 +71,7 @@ jobs:
           sudo ldconfig
 
       - name: Install Go dependencies
-        run: |
-          go get golang.org/x/term
-          go mod tidy
+        run: go mod download
 
       - name: Smoke test generateOptions.sh
         run: |

@@ -155,10 +155,11 @@ type Config struct {
 	Certificates []Certificate
 
 	// GetCertificate returns a certificate based on the ClientHello. It is
-	// called on the server side when an SNI extension is received. If set
-	// and the callback returns a certificate, it overrides Certificates.
-	// Returning nil, nil falls back to Certificates[0], or fails the
-	// handshake when Certificates is empty.
+	// called on every server handshake (wolfSSL must be built with
+	// WOLFSSL_CERT_SETUP_CB); ServerName is empty when the client sent no
+	// SNI. A returned certificate overrides Certificates. Returning nil, nil
+	// falls back to Certificates[0], or fails the handshake when Certificates
+	// is empty. A returned error aborts the handshake.
 	GetCertificate func(*ClientHelloInfo) (*Certificate, error)
 
 	// NextProtos is a list of supported application-level protocols for ALPN

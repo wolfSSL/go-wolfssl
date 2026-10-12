@@ -163,7 +163,9 @@ func init() {
         panic(fmt.Sprintf("wolfSSL: wolfCrypt_Init failed: %d", ret))
     }
     Wc_SetDefaultFips_Cb()
-    Wc_SetDefaultSeed_Cb()
+    if ret := Wc_SetDefaultSeed_Cb(); ret != 0 && ret != -174 {
+        panic(fmt.Sprintf("wolfSSL: wc_SetSeed_Cb failed: %d", ret))
+    }
 
     if ret := Wc_RunAllCast_fips(); ret != 0 && ret != -174 {
         panic(fmt.Sprintf("wolfSSL: wc_RunAllCast_fips failed: %d CAST(s) failed", ret))

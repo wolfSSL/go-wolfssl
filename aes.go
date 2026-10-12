@@ -205,6 +205,10 @@ func Wc_AesGcmSetKey(aes *C.struct_Aes, key []byte, length int) int {
 func Wc_AesGcmEncrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, outAuthTag, inAAD []byte) int {
     if len(inIv) == 0 || len(outAuthTag) == 0 { return BAD_FUNC_ARG }
     if len(outCipher) < len(inPlain) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inPlain)) || !wolfcryptFitsWord32(len(inIv)) ||
+       !wolfcryptFitsWord32(len(outAuthTag)) || !wolfcryptFitsWord32(len(inAAD)) {
+        return BAD_FUNC_ARG
+    }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -228,6 +232,10 @@ func Wc_AesGcmEncrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, outAuthTag, i
 func Wc_AesGcmDecrypt(aes *C.struct_Aes, outPlain, inCipher, inIv, inAuthTag, inAAD []byte) int {
     if len(inIv) == 0 || len(inAuthTag) == 0 { return BAD_FUNC_ARG }
     if len(outPlain) < len(inCipher) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inCipher)) || !wolfcryptFitsWord32(len(inIv)) ||
+       !wolfcryptFitsWord32(len(inAuthTag)) || !wolfcryptFitsWord32(len(inAAD)) {
+        return BAD_FUNC_ARG
+    }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))

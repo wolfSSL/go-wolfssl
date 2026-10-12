@@ -645,3 +645,41 @@ func TestHmacUpdateRejectsOversizedLength(t *testing.T) {
 		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestAesGcmRejectsOversizedLengths(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	aes := Wc_AesAllocAligned()
+	if aes == nil {
+		t.Skip("AES not available")
+	}
+	defer Wc_AesFreeAllocAligned(aes)
+	if ret := Wc_AesInit(aes, nil, INVALID_DEVID); ret != 0 {
+		t.Fatalf("Wc_AesInit: %d", ret)
+	}
+	defer Wc_AesFree(aes)
+	key := make([]byte, AES_128_KEY_SIZE)
+	if ret := Wc_AesGcmSetKey(aes, key, len(key)); ret == notCompiledE {
+		t.Skip("AES-GCM not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_AesGcmSetKey: %d", ret)
+	}
+	iv := make([]byte, GCM_NONCE_MID_SZ)
+	tag := make([]byte, AES_BLOCK_SIZE)
+	if ret := Wc_AesGcmEncrypt(aes, nil, nil, iv, tag, nil); ret != 0 {
+		t.Fatalf("empty encrypt: %d", ret)
+	}
+
+	if ret := Wc_AesGcmEncrypt(aes, huge, huge, iv, make([]byte, AES_BLOCK_SIZE), nil); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt oversized plaintext: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_AesGcmEncrypt(aes, nil, nil, iv, make([]byte, AES_BLOCK_SIZE), huge); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_AesGcmDecrypt(aes, huge, huge, iv, tag, nil); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt oversized ciphertext: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_AesGcmDecrypt(aes, nil, nil, iv, tag, huge); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

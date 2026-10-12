@@ -24,7 +24,14 @@
 package wolfSSL
 
 import (
+    "bytes"
+    "crypto/ecdsa"
+    "crypto/elliptic"
+    "crypto/rand"
+    "crypto/x509"
+    "crypto/x509/pkix"
     "encoding/pem"
+    "math/big"
     "os"
     "syscall"
     "testing"
@@ -343,5 +350,30 @@ func TestASN1WrappersRejectNilArguments(t *testing.T) {
     }
     if obj := WolfSSL_d2i_ASN1_OBJECT(nil, nil, 0); obj != nil {
         t.Error("d2i_ASN1_OBJECT(nil der) returned an object")
+    }
+}
+
+func TestAuthorityKeyIDLongerThan64Bytes(t *testing.T) {
+    key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+    if err != nil {
+        t.Fatal(err)
+    }
+    aki := bytes.Repeat([]byte{0x5A}, 100)
+    tmpl := &x509.Certificate{
+        SerialNumber:   big.NewInt(42),
+        Subject:        pkix.Name{CommonName: "long aki"},
+        NotBefore:      time.Now().Add(-time.Hour),
+        NotAfter:       time.Now().Add(time.Hour),
+        AuthorityKeyId: aki,
+    }
+    der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+    if err != nil {
+        t.Fatal(err)
+    }
+    requireOpenSSLExtra(t, der)
+    x := WolfSSL_X509_load_certificate_buffer(der, len(der), SSL_FILETYPE_ASN1)
+    defer WolfSSL_X509_free(x)
+    if got := WolfSSL_X509_get_authority_key_id(x); !bytes.Equal(got, aki) {
+        t.Fatalf("authority key id = %x, want %d bytes of 5a", got, len(aki))
     }
 }

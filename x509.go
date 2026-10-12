@@ -90,8 +90,8 @@ package wolfSSL
 //     return len;
 // }
 // /* Extract the keyIdentifier bytes from the AuthorityKeyIdentifier
-//  * extension (RFC 5280 §4.2.1.1). Returns the length copied or 0 if
-//  * the extension is absent. */
+//  * extension (RFC 5280 §4.2.1.1). Returns the length copied, 0 if
+//  * absent, or the required length (> outSz) without copying. */
 // static int wolfx509_get_authority_key_id(WOLFSSL_X509* x, unsigned char* out, int outSz) {
 //     if (x == NULL) return 0;
 //     WOLFSSL_AUTHORITY_KEYID* akid = (WOLFSSL_AUTHORITY_KEYID*)wolfSSL_X509_get_ext_d2i(
@@ -107,6 +107,9 @@ package wolfSSL
 //         int len = (int)akid->issuer->objSz;
 //         if (len > 0 && len <= outSz) {
 //             memcpy(out, akid->issuer->obj, len);
+//             n = len;
+//         }
+//         else if (len > outSz) {
 //             n = len;
 //         }
 //     }
@@ -525,6 +528,14 @@ func WolfSSL_X509_get_authority_key_id(x *WOLFSSL_X509) []byte {
 	n := C.wolfx509_get_authority_key_id(x, (*C.uchar)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
 	if n <= 0 {
 		return nil
+	}
+	if int(n) > len(buf) {
+		out := make([]byte, int(n))
+		got := C.wolfx509_get_authority_key_id(x, (*C.uchar)(unsafe.Pointer(&out[0])), n)
+		if got != n {
+			return nil
+		}
+		return out
 	}
 	out := make([]byte, int(n))
 	copy(out, buf[:n])

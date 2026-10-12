@@ -29,9 +29,8 @@ package main
 //                           unsigned char* key, unsigned int key_max_len)
 //{
 //    (void)ssl;
-//    (void)key_max_len;
 //
-//    if (strncmp(identity, "Client_identity", 15) != 0) {
+//    if (key_max_len < PSK_KEY_LEN || strcmp(identity, "Client_identity") != 0) {
 //        return 0;
 //    }
 //

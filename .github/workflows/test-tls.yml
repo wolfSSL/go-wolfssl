@@ -111,6 +111,52 @@ jobs:
             exit 1
           fi
 
+      - name: Test PSK callback bounds and identity matching
+        run: |
+          # Compile each example's cgo PSK callback on its own and call it directly
+          extract() { awk '/^import "C"/{exit} f{print} /^\/\/ #cgo/{f=1}' "$1" | sed -E 's#^// ?##'; }
+          extract examples/client/client-psk.go > /tmp/psk_client.c
+          cat >> /tmp/psk_client.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #define CHECK(c) do { if (!(c)) { printf("FAIL: %s\n", #c); return 1; } } while (0)
+          int main(void) {
+              char id[129];
+              unsigned char key[64];
+              unsigned char* smallKey = malloc(PSK_KEY_LEN - 1);
+              char* smallId = malloc(4);
+              CHECK(my_psk_client_cb(NULL, NULL, id, 128, key, sizeof(key)) == PSK_KEY_LEN);
+              CHECK(strcmp(id, "Client_identity") == 0);
+              CHECK(my_psk_client_cb(NULL, NULL, id, 128, smallKey, PSK_KEY_LEN - 1) == 0);
+              CHECK(my_psk_client_cb(NULL, NULL, smallId, 4, key, sizeof(key)) == 0);
+              free(smallKey);
+              free(smallId);
+              printf("PSK client callback checks passed\n");
+              return 0;
+          }
+          EOF
+          extract examples/server/server-psk.go > /tmp/psk_server.c
+          cat >> /tmp/psk_server.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #define CHECK(c) do { if (!(c)) { printf("FAIL: %s\n", #c); return 1; } } while (0)
+          int main(void) {
+              unsigned char key[64];
+              unsigned char* smallKey = malloc(PSK_KEY_LEN - 1);
+              CHECK(my_psk_server_cb(NULL, "Client_identity", key, sizeof(key)) == PSK_KEY_LEN);
+              CHECK(my_psk_server_cb(NULL, "Client_identity_suffix", key, sizeof(key)) == 0);
+              CHECK(my_psk_server_cb(NULL, "Client_identit", key, sizeof(key)) == 0);
+              CHECK(my_psk_server_cb(NULL, "Client_identity", smallKey, PSK_KEY_LEN - 1) == 0);
+              free(smallKey);
+              printf("PSK server callback checks passed\n");
+              return 0;
+          }
+          EOF
+          for t in psk_client psk_server; do
+            gcc -Wall -Werror -fsanitize=address -I/usr/local/include /tmp/$t.c -o /tmp/$t
+            /tmp/$t
+          done
+
       - name: Build crypto examples
         run: |
           go build examples/hash/fileHash.go

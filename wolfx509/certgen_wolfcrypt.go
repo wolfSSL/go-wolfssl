@@ -319,6 +319,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 func buildSANsDER(dnsNames, emails []string, ipAddresses []net.IP) ([]byte, error) {
 	var entries []asn1.RawValue
 	for _, name := range dnsNames {
+		if !isIA5String(name) {
+			return nil, fmt.Errorf("DNS SAN %q is not a non-empty IA5String without NUL (use IDNA A-labels)", name)
+		}
 		entries = append(entries, asn1.RawValue{
 			Tag: 2, Class: asn1.ClassContextSpecific, IsCompound: false,
 			Bytes: []byte(name),

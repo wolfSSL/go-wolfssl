@@ -700,3 +700,27 @@ func TestCreateCertificateRejectsCommonNameWithNUL(t *testing.T) {
 		t.Error("CreateCertificateRequest accepted a CommonName containing NUL")
 	}
 }
+
+func TestCreateCertificateRejectsNonIA5DNSNames(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	for _, bad := range []string{"bücher.example", "a\x00b.example", ""} {
+		tmpl := &Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      Name{CommonName: "dns"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			DNSNames:     []string{bad},
+		}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted DNS SAN %q", bad)
+		}
+		if _, err := CreateCertificateRequest(&CertificateRequest{DNSNames: []string{bad}}, k); err == nil {
+			t.Errorf("CreateCertificateRequest accepted DNS SAN %q", bad)
+		}
+	}
+}

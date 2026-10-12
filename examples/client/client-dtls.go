@@ -35,6 +35,8 @@ import (
 const (
     CONN_HOST = "127.0.0.1"
     CONN_PORT = "11111"
+    /* Must match a SAN in ../certs/server-cert.pem */
+    SERVER_NAME = "example.com"
     CONN_TYPE = "udp4"
 )
 
@@ -59,10 +61,24 @@ func main() {
         os.Exit(1)
     }
 
+    /* OpenSSL-compatible builds default to no verification, so require it explicitly */
+    wolfSSL.WolfSSL_CTX_set_verify(ctx, wolfSSL.SSL_VERIFY_PEER)
+
     /* Create a WOLFSSL object */
     ssl := wolfSSL.WolfSSL_new(ctx)
     if ssl == nil {
         fmt.Println(" wolfSSL_new failed");
+        os.Exit(1)
+    }
+
+    /* Verify the server certificate is issued for SERVER_NAME, or for the name given as the first argument */
+    serverName := SERVER_NAME
+    if len(os.Args) > 1 {
+        serverName = os.Args[1]
+    }
+    ret = wolfSSL.WolfSSL_check_domain_name(ssl, serverName)
+    if ret != wolfSSL.WOLFSSL_SUCCESS {
+        fmt.Println(" wolfSSL_check_domain_name failed ", ret);
         os.Exit(1)
     }
 

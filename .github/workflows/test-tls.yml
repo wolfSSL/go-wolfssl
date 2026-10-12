@@ -65,6 +65,19 @@ jobs:
           go get golang.org/x/term
           go mod tidy
 
+      - name: Check example certificate validity
+        run: |
+          # The clients verify the server, so an expired bundled chain fails every handshake below
+          for c in examples/certs/ca-cert.pem examples/certs/server-cert.pem; do
+            if ! openssl x509 -checkend 0 -noout -in "$c"; then
+              echo "::error::$c has expired; refresh examples/certs from wolfSSL's certs directory"
+              exit 1
+            fi
+            if ! openssl x509 -checkend 5184000 -noout -in "$c"; then
+              echo "::warning::$c expires within 60 days; refresh examples/certs"
+            fi
+          done
+
       - name: Build TLS server and client
         run: |
           (cd examples/server && go build -o server server.go)
@@ -85,6 +98,25 @@ jobs:
             echo "TLS handshake succeeded"
           else
             echo "TLS handshake failed"
+            exit 1
+          fi
+
+      - name: Test TLS client rejects a server name the certificate does not cover
+        run: |
+          (cd examples/server && ./server) &
+          SERVER_PID=$!
+          sleep 1
+
+          RC=0
+          OUTPUT=$(cd examples/client && timeout 5 ./client wrong.example.org 2>&1) || RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if [ $RC -ne 0 ] && [ $RC -ne 124 ] && echo "$OUTPUT" | grep -q "wolfSSL_connect error"; then
+            echo "Hostname mismatch rejected"
+          else
+            echo "Client accepted a mismatched server name"
             exit 1
           fi
 
@@ -177,6 +209,25 @@ jobs:
             echo "DTLS handshake succeeded"
           else
             echo "DTLS handshake failed"
+            exit 1
+          fi
+
+      - name: Test DTLS client rejects a server name the certificate does not cover
+        run: |
+          (cd examples/server && ./dtls-server) &
+          SERVER_PID=$!
+          sleep 1
+
+          RC=0
+          OUTPUT=$(cd examples/client && timeout 5 ./dtls-client wrong.example.org 2>&1) || RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if [ $RC -ne 0 ] && [ $RC -ne 124 ] && echo "$OUTPUT" | grep -q "wolfSSL_connect error"; then
+            echo "Hostname mismatch rejected"
+          else
+            echo "Client accepted a mismatched server name"
             exit 1
           fi
 

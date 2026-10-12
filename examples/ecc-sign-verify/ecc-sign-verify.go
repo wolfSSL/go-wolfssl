@@ -110,6 +110,6 @@ func main() {
     sign_verify(192, hash, printSig)
     sign_verify(256, hash, printSig)
     sign_verify(320, hash, printSig)
-    sign_verify(348, hash, printSig)
+    sign_verify(384, hash, printSig)
 
 }

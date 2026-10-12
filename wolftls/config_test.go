@@ -260,6 +260,48 @@ func TestGetCertificateNilFallsBackToStatic(t *testing.T) {
 	}
 }
 
+func TestRepeatedCertSetupInstallsStaticOnNil(t *testing.T) {
+	ctx := wolfSSL.WolfSSL_CTX_new(wolfSSL.WolfSSLv23_server_method())
+	if ctx == nil {
+		t.Fatal("WolfSSL_CTX_new failed")
+	}
+	defer wolfSSL.WolfSSL_CTX_free(ctx)
+	chain := newTestChain(t, nil)
+	if wolfSSL.WolfSSL_CTX_use_certificate_chain_buffer_format(ctx, chain.leafDER, len(chain.leafDER),
+		wolfSSL.SSL_FILETYPE_ASN1) != wolfSSL.WOLFSSL_SUCCESS ||
+		wolfSSL.WolfSSL_CTX_use_PrivateKey_buffer(ctx, chain.keyDER, len(chain.keyDER),
+			wolfSSL.SSL_FILETYPE_ASN1) != wolfSSL.WOLFSSL_SUCCESS {
+		t.Fatal("loading the CTX certificate failed")
+	}
+	ssl := wolfSSL.WolfSSL_new(ctx)
+	if ssl == nil {
+		t.Fatal("WolfSSL_new failed")
+	}
+	defer wolfSSL.WolfSSL_free(ssl)
+
+	static, dynamic := &Certificate{KeyDER: []byte("static")}, &Certificate{KeyDER: []byte("dynamic")}
+	results := []*Certificate{dynamic, nil}
+	var installed []*Certificate
+	var cbErr error
+	getCert := func(*ClientHelloInfo) (*Certificate, error) {
+		r := results[0]
+		results = results[1:]
+		return r, nil
+	}
+	install := func(_ *wolfSSL.WOLFSSL, c *Certificate) bool {
+		installed = append(installed, c)
+		return true
+	}
+	for i := 0; i < 2; i++ {
+		if !selectCertificate(ssl, getCert, static, install, &cbErr) {
+			t.Fatalf("call %d failed: %v", i, cbErr)
+		}
+	}
+	if len(installed) != 2 || installed[0] != dynamic || installed[1] != static {
+		t.Fatalf("installed %v, want the dynamic then the static certificate", installed)
+	}
+}
+
 func TestGetCertificateNilWithoutStaticFails(t *testing.T) {
 	serverCfg := &Config{
 		GetCertificate: func(*ClientHelloInfo) (*Certificate, error) {
@@ -398,7 +440,8 @@ func TestExplicitMinVersionKeepsLegacyTLS(t *testing.T) {
 	keyPEM := loadFile(t, certPath("server-key.pem"))
 	serverCfg := legacyOnly(&Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
 	res := runHandshake(t, serverCfg, legacyOnly(&Config{InsecureSkipVerify: true}))
-	if res.clientErr != nil && strings.Contains(res.clientErr.Error(), "proto_version") {
+	if res.clientErr != nil && (strings.Contains(res.clientErr.Error(), "proto_version") ||
+		strings.Contains(res.clientErr.Error(), "requires wolfSSL built with OPENSSL_EXTRA")) {
 		t.Skipf("wolfSSL built without TLS 1.1: %v", res.clientErr)
 	}
 	if res.clientErr != nil || res.serverErr != nil {
@@ -518,5 +561,27 @@ func TestIPServerNameVerifiesIPSAN(t *testing.T) {
 					res.clientErr, res.serverErr)
 			}
 		})
+	}
+}
+
+func TestGetCertificateErrorIsReturned(t *testing.T) {
+	skipWithoutGetCertificate(t)
+	chain := newTestChain(t, nil)
+	errNoHost := errors.New("no certificate for host")
+	serverCfg := &Config{
+		Certificates: []Certificate{{
+			CertDER: [][]byte{chain.leafDER, chain.interDER},
+			KeyDER:  chain.keyDER,
+		}},
+		GetCertificate: func(*ClientHelloInfo) (*Certificate, error) {
+			return nil, errNoHost
+		},
+	}
+	res := runHandshake(t, serverCfg, &Config{ServerName: "chain.test", InsecureSkipVerify: true})
+	if res.clientErr == nil {
+		t.Fatal("client handshake succeeded")
+	}
+	if !errors.Is(res.serverErr, errNoHost) {
+		t.Fatalf("server error %v does not wrap the GetCertificate error", res.serverErr)
 	}
 }

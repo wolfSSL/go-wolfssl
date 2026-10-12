@@ -309,50 +309,17 @@ func (c *Conn) doHandshake() error {
 	// Requires wolfSSL built with WOLFSSL_CERT_SETUP_CB. To also support
 	// listeners that have no static cert at construction time, wolfSSL
 	// must be built with WOLFSSL_NO_INIT_CTX_KEY.
+	var certCbErr error
 	if c.config.GetCertificate != nil && !c.isClient {
+		var static *Certificate
+		if len(c.config.Certificates) > 0 {
+			first := c.config.Certificates[0]
+			static = &first
+		}
 		getCert := c.config.GetCertificate
-		haveStatic := len(c.config.Certificates) > 0
 		c.certCbID = registerCertSetupCallback(func(ssl *wolfSSL.WOLFSSL) int {
-			serverName := wolfSSL.WolfSSL_SNI_GetServerName(ssl)
-			alpn, _ := wolfSSL.WolfSSL_ALPN_GetPeerProtocol(ssl)
-			cert, err := getCert(&ClientHelloInfo{
-				ServerName:      serverName,
-				SupportedProtos: alpn,
-			})
-			if err == nil && cert == nil && haveStatic {
-				return 1 // keep the Certificates[0] identity loaded on the CTX
-			}
-			if err != nil || cert == nil {
+			if !selectCertificate(ssl, getCert, static, useCertificate, &certCbErr) {
 				return 0 // signal fatal alert per CertSetupCb contract
-			}
-			if len(cert.CertPEM) > 0 {
-				ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, cert.CertPEM,
-					len(cert.CertPEM), wolfSSL.SSL_FILETYPE_PEM)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.KeyPEM) > 0 {
-				ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyPEM,
-					len(cert.KeyPEM), wolfSSL.SSL_FILETYPE_PEM)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.CertDER) > 0 {
-				chain := cert.derChain()
-				ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, chain,
-					len(chain), wolfSSL.SSL_FILETYPE_ASN1)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.KeyDER) > 0 {
-				ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyDER,
-					len(cert.KeyDER), wolfSSL.SSL_FILETYPE_ASN1)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
 			}
 			return 1 // success per CertSetupCb contract
 		})
@@ -437,6 +404,9 @@ func (c *Conn) doHandshake() error {
 		errCode := wolfSSL.WolfSSL_get_error(c.ssl, ret)
 		errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 		c.cleanup()
+		if certCbErr != nil {
+			return fmt.Errorf("wolftls: GetCertificate: %w", certCbErr)
+		}
 		return fmt.Errorf("wolftls: handshake failed: %s (%d)", errMsg, errCode)
 	}
 
@@ -746,4 +716,58 @@ func (c *Conn) freeCtxLocked() {
 		wolfSSL.WolfSSL_CTX_free(c.ctx)
 		c.ctx = nil
 	}
+}
+
+// selectCertificate installs the certificate getCert picks on ssl, or static
+// when it returns nil, so a repeated cert-setup callback never keeps an
+// earlier choice.
+func selectCertificate(ssl *wolfSSL.WOLFSSL, getCert func(*ClientHelloInfo) (*Certificate, error),
+	static *Certificate, install func(*wolfSSL.WOLFSSL, *Certificate) bool, errp *error) bool {
+	alpn, _ := wolfSSL.WolfSSL_ALPN_GetPeerProtocol(ssl)
+	cert, err := getCert(&ClientHelloInfo{
+		ServerName:      wolfSSL.WolfSSL_SNI_GetServerName(ssl),
+		SupportedProtos: alpn,
+	})
+	if err != nil {
+		*errp = err
+		return false
+	}
+	if cert == nil {
+		cert = static
+	}
+	return cert != nil && install(ssl, cert)
+}
+
+// useCertificate loads cert's chain and private key onto ssl.
+func useCertificate(ssl *wolfSSL.WOLFSSL, cert *Certificate) bool {
+	if len(cert.CertPEM) > 0 {
+		ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, cert.CertPEM,
+			len(cert.CertPEM), wolfSSL.SSL_FILETYPE_PEM)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.KeyPEM) > 0 {
+		ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyPEM,
+			len(cert.KeyPEM), wolfSSL.SSL_FILETYPE_PEM)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.CertDER) > 0 {
+		chain := cert.derChain()
+		ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, chain,
+			len(chain), wolfSSL.SSL_FILETYPE_ASN1)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.KeyDER) > 0 {
+		ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyDER,
+			len(cert.KeyDER), wolfSSL.SSL_FILETYPE_ASN1)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	return true
 }

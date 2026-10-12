@@ -25,6 +25,8 @@ import (
     "errors"
     "fmt"
     "runtime"
+    "sync"
+    "sync/atomic"
 
     wolfSSL "github.com/wolfssl/go-wolfssl"
 )
@@ -36,10 +38,16 @@ import (
 // This handle currently only carries enough state for verify
 // operations. Sign/decrypt callers will need an RNG attached, mirroring
 // EccKey.hasRng — out of scope until needed.
+//
+// The verify helpers lock the key for the duration of each wolfCrypt call,
+// so an RsaKey may be shared between goroutines and Free waits for
+// in-flight operations. Direct users of Raw must hold Lock and check
+// IsLive while holding it.
 type RsaKey struct {
+    mu   sync.Mutex
     raw  wolfSSL.RsaKey
-    init bool // wc_InitRsaKey has run
-    live bool // additionally, key material is populated
+    init bool  // wc_InitRsaKey has run
+    live int32 // atomic; additionally, key material is populated
 }
 
 // NewEmptyRsaKey returns an RsaKey with wc_InitRsaKey called but no key
@@ -58,25 +66,65 @@ func NewEmptyRsaKey() (*RsaKey, error) {
 }
 
 // MarkLive flags the key as fully populated.
-func (k *RsaKey) MarkLive() { k.live = true }
+func (k *RsaKey) MarkLive() {
+    k.mu.Lock()
+    defer k.mu.Unlock()
+    if !k.init {
+        return
+    }
+    atomic.StoreInt32(&k.live, 1)
+}
 
 // IsLive reports whether the key has key material loaded and is not yet
-// freed.
-func (k *RsaKey) IsLive() bool { return k != nil && k.live }
+// freed. The result is stable only while Lock is held.
+func (k *RsaKey) IsLive() bool {
+    return k != nil && atomic.LoadInt32(&k.live) == 1
+}
+
+// acquire locks a live key and returns its unlock function, or returns nil
+// (with the key unlocked) if k is nil or not live.
+func (k *RsaKey) acquire() func() {
+    if k == nil {
+        return nil
+    }
+    k.mu.Lock()
+    if atomic.LoadInt32(&k.live) == 0 {
+        k.mu.Unlock()
+        return nil
+    }
+    if testHookAcquired != nil {
+        testHookAcquired()
+    }
+    return k.mu.Unlock
+}
+
+// Lock serializes direct use of Raw with the helpers in this package and
+// with Free. While holding it, do not call MarkLive, Free or the
+// package-level helpers on k; they lock k.
+func (k *RsaKey) Lock() { k.mu.Lock() }
+
+// Unlock releases the lock taken by Lock.
+func (k *RsaKey) Unlock() { k.mu.Unlock() }
 
 // Free releases the wolfCrypt key. Safe to call multiple times.
 func (k *RsaKey) Free() {
-    if k == nil || !k.init {
+    if k == nil {
+        return
+    }
+    k.mu.Lock()
+    defer k.mu.Unlock()
+    if !k.init {
         return
     }
     wolfSSL.Wc_FreeRsaKey(&k.raw)
     k.init = false
-    k.live = false
+    atomic.StoreInt32(&k.live, 0)
     runtime.SetFinalizer(k, nil)
 }
 
 // Raw returns the underlying wolfCrypt RsaKey for direct use with
-// low-level Wc_* APIs. The returned pointer is invalid after Free.
+// low-level Wc_* APIs. The returned pointer is invalid after Free; hold
+// Lock while using it.
 func (k *RsaKey) Raw() *wolfSSL.RsaKey { return &k.raw }
 
 // ImportRsaPublicRaw imports an RSA public key from the raw modulus n
@@ -116,9 +164,11 @@ func checkDigestLen(op string, hashType int, digest []byte) error {
 // MGF1 with the same hash family as hashType. saltLen is fixed at
 // hashLen.
 func RsaVerifyPSS(pub *RsaKey, hashType int, digest, sig []byte) error {
-    if !pub.IsLive() {
+    unlock := pub.acquire()
+    if unlock == nil {
         return errors.New("handles: RsaVerifyPSS: key is not live")
     }
+    defer unlock()
     if len(digest) == 0 || len(sig) == 0 {
         return errors.New("handles: RsaVerifyPSS: empty digest or sig")
     }
@@ -146,9 +196,11 @@ func RsaVerifyPSS(pub *RsaKey, hashType int, digest, sig []byte) error {
 
 // RsaVerifyPKCS1v15 verifies an RSASSA-PKCS1-v1_5 signature
 func RsaVerifyPKCS1v15(pub *RsaKey, hashType int, digest, sig []byte) error {
-    if !pub.IsLive() {
+    unlock := pub.acquire()
+    if unlock == nil {
         return errors.New("handles: RsaVerifyPKCS1v15: key is not live")
     }
+    defer unlock()
     if len(digest) == 0 || len(sig) == 0 {
         return errors.New("handles: RsaVerifyPKCS1v15: empty digest or sig")
     }

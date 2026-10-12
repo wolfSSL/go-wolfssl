@@ -105,6 +105,7 @@ func main() {
         fmt.Println("Error getting file descriptor: ", err.Error())
         os.Exit(1)
     }
+    defer file.Close()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 

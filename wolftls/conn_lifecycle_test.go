@@ -22,6 +22,7 @@ package wolftls
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -147,7 +148,7 @@ func runWithoutPanic(t *testing.T, f func() error) error {
 		err = f()
 	}()
 	if escaped != nil {
-		t.Fatalf("panic escaped through wolfSSL: %v", escaped)
+		t.Fatalf("unexpected panic: %v", escaped)
 	}
 	return err
 }
@@ -969,5 +970,49 @@ func TestCloseUnblocksReadWithoutDeadlines(t *testing.T) {
 		}
 	case <-time.After(lifecycleTimeout):
 		t.Fatal("Read did not return after Close")
+	}
+}
+
+// kickHookConn runs onKick, once, when the first expired deadline is set.
+type kickHookConn struct {
+	net.Conn
+	kicked int32
+	onKick func()
+}
+
+func (k *kickHookConn) SetDeadline(t time.Time) error {
+	err := k.Conn.SetDeadline(t)
+	if !t.IsZero() && t.Before(time.Now()) && atomic.CompareAndSwapInt32(&k.kicked, 0, 1) {
+		k.onKick()
+	}
+	return err
+}
+
+func silentServerClientConfig() *Config {
+	return &Config{ServerName: "localhost", InsecureSkipVerify: true}
+}
+
+func TestHandshakeContextCancelRacingClose(t *testing.T) {
+	cConn, sConn := lifecycleTCPPair(t)
+	defer sConn.Close()
+	kc := &kickHookConn{Conn: cConn}
+	cli := Client(kc, silentServerClientConfig())
+	defer cli.Close()
+	kc.onKick = func() {
+		closed := make(chan struct{})
+		go func() {
+			cli.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(lifecycleTimeout):
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runWithoutPanic(t, func() error { return cli.HandshakeContext(ctx) }); err == nil {
+		t.Fatal("handshake succeeded with a canceled context")
 	}
 }

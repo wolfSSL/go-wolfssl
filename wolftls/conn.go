@@ -279,12 +279,19 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 	case <-done:
 		return err
 	case <-ctx.Done():
+		c.mu.RLock()
+		conn := c.conn
+		c.mu.RUnlock()
 		// Set an expired deadline to unblock the blocking wolfSSL call
 		// without closing the conn out from under the handshake goroutine.
-		c.conn.SetDeadline(time.Unix(1, 0))
+		if conn != nil {
+			conn.SetDeadline(time.Unix(1, 0))
+		}
 		<-done // wait for Handshake goroutine to finish
 		// Restore deadline so the caller can still close cleanly.
-		c.conn.SetDeadline(time.Time{})
+		if conn != nil {
+			conn.SetDeadline(time.Time{})
+		}
 		if err == nil {
 			err = ctx.Err()
 		}

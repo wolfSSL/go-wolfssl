@@ -853,8 +853,14 @@ func (c *Conn) Close() error {
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
+	var earlyCloseErr error
+	closedEarly := false
 	if conn != nil {
-		conn.SetDeadline(time.Unix(1, 0))
+		if err := conn.SetDeadline(time.Unix(1, 0)); err != nil {
+			// Without deadline support only closing the transport interrupts blocked I/O.
+			earlyCloseErr = conn.Close()
+			closedEarly = true
+		}
 	}
 	// Block until any concurrent doHandshake finishes — otherwise
 	// freeSSLLocked below would free c.ssl/c.ctx out from under it
@@ -870,7 +876,10 @@ func (c *Conn) Close() error {
 	c.freeSSLLocked()
 	runtime.SetFinalizer(c, nil)
 	if c.conn != nil {
-		err := c.conn.Close()
+		err := earlyCloseErr
+		if !closedEarly {
+			err = c.conn.Close()
+		}
 		c.conn = nil
 		return err
 	}

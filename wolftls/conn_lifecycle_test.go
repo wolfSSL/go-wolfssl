@@ -922,3 +922,52 @@ func TestConcurrentClose(t *testing.T) {
 		}
 	}
 }
+
+var errNoDeadline = errors.New("deadlines not supported")
+
+// deadlineFreeConn is a transport whose deadline setters always fail.
+type deadlineFreeConn struct{ net.Conn }
+
+func (deadlineFreeConn) SetDeadline(time.Time) error      { return errNoDeadline }
+func (deadlineFreeConn) SetReadDeadline(time.Time) error  { return errNoDeadline }
+func (deadlineFreeConn) SetWriteDeadline(time.Time) error { return errNoDeadline }
+
+func TestCloseUnblocksReadWithoutDeadlines(t *testing.T) {
+	var raw net.Conn
+	var nc *notifyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		raw = c
+		nc = newNotifyConn(deadlineFreeConn{c})
+		return nc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&nc.armed, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Read(make([]byte, 16))
+		readDone <- err
+	}()
+	select {
+	case <-nc.entered:
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("client Read never reached the transport")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- cli.Close() }()
+	select {
+	case <-closeDone:
+	case <-time.After(lifecycleTimeout):
+		raw.Close()
+		t.Fatal("Close blocked on a Read the transport deadline could not interrupt")
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("Read succeeded on a closed connection")
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read did not return after Close")
+	}
+}

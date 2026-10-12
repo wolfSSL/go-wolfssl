@@ -225,6 +225,7 @@ func WolfSSL_dtls_create_peer(port int, ip string) unsafe.Pointer {
 }
 
 func WolfSSL_dtls_set_peer(ssl *C.struct_WOLFSSL, addr unsafe.Pointer, peerSz int) int {
+    if peerSz < 0 || uint64(peerSz) > math.MaxUint32 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_dtls_set_peer(ssl, addr, C.uint(peerSz)))
 }
 

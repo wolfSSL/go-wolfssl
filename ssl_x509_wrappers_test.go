@@ -33,6 +33,7 @@ import (
     "encoding/pem"
     "math/big"
     "os"
+    "strconv"
     "syscall"
     "testing"
     "time"
@@ -375,5 +376,42 @@ func TestAuthorityKeyIDLongerThan64Bytes(t *testing.T) {
     defer WolfSSL_X509_free(x)
     if got := WolfSSL_X509_get_authority_key_id(x); !bytes.Equal(got, aki) {
         t.Fatalf("authority key id = %x, want %d bytes of 5a", got, len(aki))
+    }
+}
+
+func TestDTLSSetPeerRejectsNegativeSize(t *testing.T) {
+    if strconv.IntSize < 64 {
+        t.Skip("needs 64-bit int")
+    }
+    WolfSSL_Init()
+    method := WolfDTLSv1_2_client_method()
+    if method == nil {
+        t.Skip("wolfSSL built without DTLS")
+    }
+    ctx := WolfSSL_CTX_new(method)
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    ssl := WolfSSL_new(ctx)
+    if ssl == nil {
+        t.Fatal("WolfSSL_new failed")
+    }
+    defer WolfSSL_free(ssl)
+    addr := WolfSSL_dtls_create_peer(4433, "127.0.0.1")
+    if addr == nil {
+        t.Fatal("dtls_create_peer failed")
+    }
+    defer WolfSSL_dtls_free_peer(addr)
+    var wrapsToSixteen int64 = -(1 << 32) + 16
+    if ret := WolfSSL_dtls_set_peer(ssl, addr, int(wrapsToSixteen)); ret != BAD_FUNC_ARG {
+        t.Fatalf("dtls_set_peer with negative size = %d, want BAD_FUNC_ARG", ret)
+    }
+    var overflowsToSixteen int64 = (1 << 32) + 16
+    if ret := WolfSSL_dtls_set_peer(ssl, addr, int(overflowsToSixteen)); ret != BAD_FUNC_ARG {
+        t.Fatalf("dtls_set_peer with oversized size = %d, want BAD_FUNC_ARG", ret)
+    }
+    if ret := WolfSSL_dtls_set_peer(ssl, addr, -1); ret != BAD_FUNC_ARG {
+        t.Fatalf("dtls_set_peer(-1) = %d, want BAD_FUNC_ARG", ret)
     }
 }

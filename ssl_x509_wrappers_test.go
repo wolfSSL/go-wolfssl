@@ -262,3 +262,21 @@ func TestPeerChainDERMatchesServerChain(t *testing.T) {
         }
     }
 }
+
+func TestProtoVersionConstantsAccepted(t *testing.T) {
+    WolfSSL_Init()
+    ctx := WolfSSL_CTX_new_v23_client()
+    if ctx == nil {
+        t.Fatal("CTX_new failed")
+    }
+    defer WolfSSL_CTX_free(ctx)
+    if WolfSSL_CTX_set_max_proto_version(ctx, 0) == testNotCompiledIn {
+        t.Skip("wolfSSL built without proto version setters")
+    }
+    if ret := WolfSSL_CTX_set_min_proto_version(ctx, WOLFSSL_TLSV1_2); ret != WOLFSSL_SUCCESS {
+        t.Fatalf("set_min_proto_version(WOLFSSL_TLSV1_2) = %d", ret)
+    }
+    if ret := WolfSSL_CTX_set_max_proto_version(ctx, WOLFSSL_TLSV1_3); ret != WOLFSSL_SUCCESS {
+        t.Fatalf("set_max_proto_version(WOLFSSL_TLSV1_3) = %d", ret)
+    }
+}

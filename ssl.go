@@ -565,12 +565,12 @@ func WolfSSL_get_peer_cert_chain_DER(ssl *WOLFSSL) [][]byte {
     return [][]byte{C.GoBytes(unsafe.Pointer(derPtr), outSz)}
 }
 
-/* Protocol version constants matching wolfSSL's internal values. */
+/* Protocol versions accepted by WolfSSL_CTX_set_min/max_proto_version. */
 const (
-    WOLFSSL_TLSV1   = 1
-    WOLFSSL_TLSV1_1 = 2
-    WOLFSSL_TLSV1_2 = 3
-    WOLFSSL_TLSV1_3 = 4
+    WOLFSSL_TLSV1   = C.TLS1_VERSION
+    WOLFSSL_TLSV1_1 = C.TLS1_1_VERSION
+    WOLFSSL_TLSV1_2 = C.TLS1_2_VERSION
+    WOLFSSL_TLSV1_3 = C.TLS1_3_VERSION
 )
 
 func WolfSSL_CTX_set_min_proto_version(ctx *WOLFSSL_CTX, ver int) int {

@@ -128,3 +128,104 @@ func TestEncodeSignatureShortOutput(t *testing.T) {
 		t.Fatalf("oversized digest: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestCurve25519LegacyExportStaysBigEndian(t *testing.T) {
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	priv := make([]byte, 32)
+	ret := Wc_curve25519_make_priv(rng, priv)
+	if ret == notCompiledE {
+		t.Skip("Curve25519 not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_curve25519_make_priv: %d", ret)
+	}
+	key := new(Curve25519_key)
+	if ret := Wc_curve25519_init(key); ret != 0 {
+		t.Fatalf("Wc_curve25519_init: %d", ret)
+	}
+	defer Wc_curve25519_free(key)
+	if ret := Wc_curve25519_import_private(priv, key); ret != 0 {
+		t.Fatalf("Wc_curve25519_import_private: %d", ret)
+	}
+	legacy := make([]byte, 32)
+	if ret := Wc_curve25519_export_private_raw(key, legacy); ret != 0 {
+		t.Fatalf("Wc_curve25519_export_private_raw: %d", ret)
+	}
+	for i := range priv {
+		if legacy[i] != priv[len(priv)-1-i] {
+			t.Fatalf("legacy export is not big-endian:\n got %x\n priv %x", legacy, priv)
+		}
+	}
+	if ret := Wc_curve25519_export_private_raw_ex(key, legacy, 7); ret != BAD_FUNC_ARG {
+		t.Fatalf("unknown endian: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}
+
+func TestCurve25519ExportMatchesRfc7748Encoding(t *testing.T) {
+	priv := []byte{
+		0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
+		0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
+		0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a,
+		0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a,
+	}
+	wantPub := []byte{
+		0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54,
+		0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7, 0x5a,
+		0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4,
+		0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b, 0x4e, 0x6a,
+	}
+	key := new(Curve25519_key)
+	if ret := Wc_curve25519_init(key); ret == notCompiledE {
+		t.Skip("Curve25519 not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_curve25519_init: %d", ret)
+	}
+	defer Wc_curve25519_free(key)
+	if ret := Wc_curve25519_import_private(priv, key); ret != 0 {
+		t.Fatalf("Wc_curve25519_import_private: %d", ret)
+	}
+	exported := make([]byte, 32)
+	if ret := Wc_curve25519_export_private_raw_ex(key, exported, EC25519_LITTLE_ENDIAN); ret != 0 {
+		t.Fatalf("Wc_curve25519_export_private_raw_ex: %d", ret)
+	}
+	pub := make([]byte, 32)
+	if ret := Wc_curve25519_make_pub(pub, exported); ret != 0 {
+		t.Fatalf("Wc_curve25519_make_pub on exported key: %d", ret)
+	}
+	for i := range wantPub {
+		if pub[i] != wantPub[i] {
+			t.Fatalf("public key from exported scalar:\n got %x\nwant %x", pub, wantPub)
+		}
+	}
+}
+
+func TestCurve25519PrivateExportImportRoundTrip(t *testing.T) {
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	priv := make([]byte, 32)
+	ret := Wc_curve25519_make_priv(rng, priv)
+	if ret == notCompiledE {
+		t.Skip("Curve25519 not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("Wc_curve25519_make_priv: %d", ret)
+	}
+	key := new(Curve25519_key)
+	if ret := Wc_curve25519_init(key); ret != 0 {
+		t.Fatalf("Wc_curve25519_init: %d", ret)
+	}
+	defer Wc_curve25519_free(key)
+	if ret := Wc_curve25519_import_private(priv, key); ret != 0 {
+		t.Fatalf("Wc_curve25519_import_private: %d", ret)
+	}
+	out := make([]byte, 32)
+	if ret := Wc_curve25519_export_private_raw_ex(key, out, EC25519_LITTLE_ENDIAN); ret != 0 {
+		t.Fatalf("Wc_curve25519_export_private_raw_ex: %d", ret)
+	}
+	for i := range priv {
+		if out[i] != priv[i] {
+			t.Fatalf("exported private key differs from imported:\n got %x\nwant %x", out, priv)
+		}
+	}
+}

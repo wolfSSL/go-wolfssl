@@ -874,6 +874,85 @@ func TestGetCertificate(t *testing.T) {
 	}
 }
 
+func TestGetCertificateRejectionIsEnforced(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	certCbMu.Lock()
+	registered := len(certCbCallbacks)
+	certCbMu.Unlock()
+
+	var once sync.Once
+	called := make(chan struct{})
+	serverConfig := &Config{
+		GetCertificate: func(hello *ClientHelloInfo) (*Certificate, error) {
+			once.Do(func() { close(called) })
+			return nil, fmt.Errorf("host %q not allowed", hello.ServerName)
+		},
+		Certificates: []Certificate{{
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
+		}},
+	}
+	clientConfig := &Config{
+		ServerName:         "unknown.example.com",
+		InsecureSkipVerify: true,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		err = tlsConn.Handshake()
+		tlsConn.Close()
+		errc <- err
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	tlsConn := Client(conn, clientConfig)
+	tlsConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientErr := tlsConn.Handshake()
+	tlsConn.Close()
+
+	serverErr := <-errc
+	if serverErr == nil {
+		t.Fatal("server handshake succeeded although GetCertificate rejected the host")
+	}
+	if clientErr == nil {
+		t.Fatal("client handshake succeeded although GetCertificate rejected the host")
+	}
+
+	// Either the hook ran and rejected, or the build lacks it and the
+	// handshake must fail with the explicit install error.
+	select {
+	case <-called:
+	default:
+		if !strings.Contains(serverErr.Error(), "WOLFSSL_CERT_SETUP_CB") {
+			t.Fatalf("GetCertificate never ran and the error is not the install failure: %v", serverErr)
+		}
+	}
+	certCbMu.Lock()
+	leaked := len(certCbCallbacks) - registered
+	certCbMu.Unlock()
+	if leaked != 0 {
+		t.Fatalf("%d cert-setup callbacks still registered after the handshake failed", leaked)
+	}
+	t.Logf("rejected as expected: server: %v", serverErr)
+}
+
 func TestPeerCertsSurviveClose(t *testing.T) {
 	certPEM := loadFile(t, certPath("server-cert.pem"))
 	keyPEM := loadFile(t, certPath("server-key.pem"))

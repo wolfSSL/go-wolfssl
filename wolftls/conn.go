@@ -344,7 +344,10 @@ func (c *Conn) doHandshake() error {
 			}
 			return 1 // success per CertSetupCb contract
 		})
-		ctxSetCertSetupCallback(c.ctx, c.certCbID)
+		if err := ctxSetCertSetupCallback(c.ctx, c.certCbID); err != nil {
+			c.freeCtxLocked()
+			return err
+		}
 	}
 
 	// Set cipher suites

@@ -81,21 +81,22 @@ package wolftls
 // }
 // #endif
 // #ifdef WOLFSSL_CERT_SETUP_CB
-// static inline void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
+// static inline int wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
 //     wolfSSL_CTX_set_cert_cb(ctx, certSetupTrampoline,
 //                              (void*)(intptr_t)connID);
+//     return 1;
 // }
 // #else
-// /* Stub for vanilla wolfSSL builds without WOLFSSL_CERT_SETUP_CB.
-//  * wolftls.Conn's per-connection GetCertificate callback is unavailable
-//  * in this build mode; ctxSetCertSetupCallback becomes a no-op. */
-// static inline void wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
+// /* Without WOLFSSL_CERT_SETUP_CB the hook cannot be installed; report it. */
+// static inline int wolftls_set_cert_cb(WOLFSSL_CTX* ctx, int connID) {
 //     (void)ctx; (void)connID;
+//     return 0;
 // }
 // #endif
 import "C"
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -319,7 +320,11 @@ func wolftlsCertSetupCallback(sslPtr unsafe.Pointer, connID C.int) C.int {
 }
 
 // ctxSetCertSetupCallback installs the CertSetup trampoline on ctx with
-// connID as the opaque arg the trampoline will look up.
-func ctxSetCertSetupCallback(ctx *wolfSSL.WOLFSSL_CTX, connID int) {
-	C.wolftls_set_cert_cb((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx)), C.int(connID))
+// connID as the opaque arg the trampoline will look up. It returns an
+// error when wolfSSL was built without WOLFSSL_CERT_SETUP_CB.
+func ctxSetCertSetupCallback(ctx *wolfSSL.WOLFSSL_CTX, connID int) error {
+	if C.wolftls_set_cert_cb((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx)), C.int(connID)) != 1 {
+		return errors.New("wolftls: GetCertificate requires wolfSSL built with WOLFSSL_CERT_SETUP_CB")
+	}
+	return nil
 }

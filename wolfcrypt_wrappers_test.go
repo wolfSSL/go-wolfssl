@@ -683,3 +683,33 @@ func TestAesGcmRejectsOversizedLengths(t *testing.T) {
 		t.Fatalf("decrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestChaChaPolyRejectsOversizedLengths(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	key := make([]byte, CHACHA20_POLY1305_AEAD_KEYSIZE)
+	iv := make([]byte, CHACHA20_POLY1305_AEAD_IV_SIZE)
+	tag := make([]byte, CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
+	one := make([]byte, 1)
+	ct := make([]byte, 1)
+	ret := Wc_ChaCha20Poly1305_Encrypt(key, iv, nil, one, ct, tag)
+	if ret == notCompiledE {
+		t.Skip("ChaCha20-Poly1305 not compiled")
+	}
+	if ret != 0 {
+		t.Fatalf("encrypt: %d", ret)
+	}
+	scratch := make([]byte, CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
+	if ret := Wc_ChaCha20Poly1305_Encrypt(key, iv, nil, huge, huge, scratch); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt oversized plaintext: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_ChaCha20Poly1305_Encrypt(key, iv, huge, one, make([]byte, 1), scratch); ret != BAD_FUNC_ARG {
+		t.Fatalf("encrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_ChaCha20Poly1305_Decrypt(key, iv, nil, huge, tag, huge); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt oversized ciphertext: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+	if ret := Wc_ChaCha20Poly1305_Decrypt(key, iv, huge, ct, tag, make([]byte, 1)); ret != BAD_FUNC_ARG {
+		t.Fatalf("decrypt oversized AAD: got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

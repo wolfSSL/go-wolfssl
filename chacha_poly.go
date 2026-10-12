@@ -80,6 +80,7 @@ func Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, outCipher, outAuth
     if len(inIv) != CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
     if len(outAuthTag) < CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE { return BAD_FUNC_ARG }
     if len(outCipher) < len(inPlain) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inAAD)) || !wolfcryptFitsWord32(len(inPlain)) { return BAD_FUNC_ARG }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -102,6 +103,7 @@ func Wc_ChaCha20Poly1305_Decrypt(inKey, inIv, inAAD, inCipher, inAuthTag , outPl
     if len(inIv) != CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
     if len(inAuthTag) < CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE { return BAD_FUNC_ARG }
     if len(outPlain) < len(inCipher) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inAAD)) || !wolfcryptFitsWord32(len(inCipher)) { return BAD_FUNC_ARG }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))

@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -60,6 +61,9 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 	if pubKey == nil || signer == nil {
 		return nil, errors.New("wolfx509: nil key")
 	}
+	if template.KeyUsage&KeyUsageDecipherOnly != 0 && template.KeyUsage&KeyUsageKeyAgreement == 0 {
+		return nil, errors.New("wolfx509: KeyUsageDecipherOnly requires KeyUsageKeyAgreement")
+	}
 
 	notBefore, notAfter, err := resolveValidity(template.NotBefore,
 		template.NotAfter, template.ValidDays)
@@ -90,14 +94,35 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 		BasicConstraintsValid: template.BasicConstraintsValid,
 	}
 
+	var der []byte
 	if template == parent && pubKey == signer {
-		return makeAndSignSelfSignedCert(opts, signer)
-	}
-	// CA-signed: need parent.Raw to extract the issuer DN.
-	if len(parent.Raw) == 0 {
+		der, err = makeAndSignSelfSignedCert(opts, signer)
+	} else if len(parent.Raw) == 0 {
+		// CA-signed: need parent.Raw to extract the issuer DN.
 		return nil, errors.New("wolfx509: parent.Raw is empty; CA cert must be parsed via ParseCertificate first")
+	} else {
+		der, err = makeAndSignCASignedCert(opts, parent.Raw, pubKey, signer)
 	}
-	return makeAndSignCASignedCert(opts, parent.Raw, pubKey, signer)
+	if err == nil && template.KeyUsage&KeyUsageDecipherOnly != 0 {
+		if err = checkEncodedKeyUsage(der, template.KeyUsage); err != nil {
+			return nil, err
+		}
+	}
+	return der, err
+}
+
+// checkEncodedKeyUsage rejects DER whose keyUsage differs from want. Older
+// wolfSSL mis-encodes the 9th (decipherOnly) bit as an invalid BIT STRING or
+// as digitalSignature.
+func checkEncodedKeyUsage(der []byte, want KeyUsage) error {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("%w: wolfSSL cannot encode decipherOnly: %v", ErrUnsupportedCreateMode, err)
+	}
+	if KeyUsage(cert.KeyUsage) != want {
+		return fmt.Errorf("%w: wolfSSL encoded key usage %#x, want %#x", ErrUnsupportedCreateMode, int(cert.KeyUsage), int(want))
+	}
+	return nil
 }
 
 // CertificateRequest is the template for CreateCertificateRequest. Mirrors
@@ -267,6 +292,9 @@ func translateKeyUsage(k KeyUsage) int {
 	}
 	if k&KeyUsageEncipherOnly != 0 {
 		out |= wcKeyUsageEncipherOnly
+	}
+	if k&KeyUsageDecipherOnly != 0 {
+		out |= wcKeyUsageDecipherOnly
 	}
 	return out
 }

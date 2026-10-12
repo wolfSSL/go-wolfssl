@@ -22,8 +22,13 @@ package wolfx509
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -722,5 +727,78 @@ func TestCreateCertificateRejectsNonIA5DNSNames(t *testing.T) {
 		if _, err := CreateCertificateRequest(&CertificateRequest{DNSNames: []string{bad}}, k); err == nil {
 			t.Errorf("CreateCertificateRequest accepted DNS SAN %q", bad)
 		}
+	}
+}
+
+func TestCheckEncodedKeyUsageRejectsMisencoding(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyAgreement | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := KeyUsageKeyAgreement | KeyUsageDecipherOnly
+	if err := checkEncodedKeyUsage(der, want); !errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Errorf("digitalSignature in place of decipherOnly: err = %v, want ErrUnsupportedCreateMode", err)
+	}
+	if err := checkEncodedKeyUsage(der, KeyUsageKeyAgreement|KeyUsageDigitalSignature); err != nil {
+		t.Errorf("matching key usage rejected: %v", err)
+	}
+}
+
+func TestCreateCertificateRejectsDecipherOnlyWithoutKeyAgreement(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "decipher-only alone"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     KeyUsageDecipherOnly,
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+		t.Error("CreateCertificate accepted KeyUsageDecipherOnly without KeyUsageKeyAgreement")
+	}
+}
+
+func TestCreateCertificateKeyUsageDecipherOnly(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	want := KeyUsageKeyAgreement | KeyUsageDecipherOnly
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "decipher-only"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     want,
+	}
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Skipf("this wolfSSL cannot encode decipherOnly, and says so: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	stdCert, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib parse: %v", err)
+	}
+	if got := KeyUsage(stdCert.KeyUsage); got != want {
+		t.Errorf("KeyUsage = %#x, want %#x", got, want)
 	}
 }

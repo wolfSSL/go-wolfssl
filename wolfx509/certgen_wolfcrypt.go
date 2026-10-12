@@ -94,6 +94,7 @@ const (
 	wcKeyUsageCertSign         = 0x0004
 	wcKeyUsageCRLSign          = 0x0002
 	wcKeyUsageEncipherOnly     = 0x0001
+	wcKeyUsageDecipherOnly     = 0x8000
 )
 
 // Extended key usage bits in wolfCrypt's EXTKEYUSE_* layout.

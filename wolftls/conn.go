@@ -305,6 +305,7 @@ func (c *Conn) doHandshake() error {
 	// must be built with WOLFSSL_NO_INIT_CTX_KEY.
 	if c.config.GetCertificate != nil && !c.isClient {
 		getCert := c.config.GetCertificate
+		haveStatic := len(c.config.Certificates) > 0
 		c.certCbID = registerCertSetupCallback(func(ssl *wolfSSL.WOLFSSL) int {
 			serverName := wolfSSL.WolfSSL_SNI_GetServerName(ssl)
 			alpn, _ := wolfSSL.WolfSSL_ALPN_GetPeerProtocol(ssl)
@@ -312,6 +313,9 @@ func (c *Conn) doHandshake() error {
 				ServerName:      serverName,
 				SupportedProtos: alpn,
 			})
+			if err == nil && cert == nil && haveStatic {
+				return 1 // keep the Certificates[0] identity loaded on the CTX
+			}
 			if err != nil || cert == nil {
 				return 0 // signal fatal alert per CertSetupCb contract
 			}

@@ -224,3 +224,45 @@ func TestDERCertificateChainSendsIntermediates(t *testing.T) {
 		}
 	})
 }
+
+func TestGetCertificateNilFallsBackToStatic(t *testing.T) {
+	skipWithoutGetCertificate(t)
+	chain := newTestChain(t, nil)
+	called := make(chan struct{}, 1)
+	serverCfg := &Config{
+		Certificates: []Certificate{{
+			CertDER: [][]byte{chain.leafDER, chain.interDER},
+			KeyDER:  chain.keyDER,
+		}},
+		GetCertificate: func(*ClientHelloInfo) (*Certificate, error) {
+			called <- struct{}{}
+			return nil, nil
+		},
+	}
+	clientCfg := &Config{
+		ServerName: "chain.test",
+		RootCAPEMs: [][]byte{chain.rootPEM},
+	}
+	res := runHandshake(t, serverCfg, clientCfg)
+	if res.clientErr != nil || res.serverErr != nil {
+		t.Fatalf("handshake: client %v, server %v", res.clientErr, res.serverErr)
+	}
+	select {
+	case <-called:
+	default:
+		t.Fatal("GetCertificate was not called")
+	}
+}
+
+func TestGetCertificateNilWithoutStaticFails(t *testing.T) {
+	serverCfg := &Config{
+		GetCertificate: func(*ClientHelloInfo) (*Certificate, error) {
+			return nil, nil
+		},
+	}
+	res := runHandshake(t, serverCfg, &Config{InsecureSkipVerify: true})
+	if res.serverErr == nil || res.clientErr == nil {
+		t.Fatalf("handshake without any certificate succeeded: client %v, server %v",
+			res.clientErr, res.serverErr)
+	}
+}

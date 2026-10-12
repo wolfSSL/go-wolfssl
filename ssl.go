@@ -484,7 +484,12 @@ func WolfSSL_get_chain_count(chain *C.WOLFSSL_X509_CHAIN) int {
     return int(C.wolfSSL_get_chain_count(chain))
 }
 
+func wrapperChainIndexValid(chain *C.WOLFSSL_X509_CHAIN, idx int) bool {
+    return chain != nil && idx >= 0 && idx < int(C.wolfSSL_get_chain_count(chain))
+}
+
 func WolfSSL_get_chain_cert(chain *C.WOLFSSL_X509_CHAIN, idx int) []byte {
+    if !wrapperChainIndexValid(chain, idx) { return nil }
     length := int(C.wolfSSL_get_chain_length(chain, C.int(idx)))
     if length <= 0 { return nil }
     ptr := C.wolfSSL_get_chain_cert(chain, C.int(idx))
@@ -493,6 +498,7 @@ func WolfSSL_get_chain_cert(chain *C.WOLFSSL_X509_CHAIN, idx int) []byte {
 }
 
 func WolfSSL_get_chain_length(chain *C.WOLFSSL_X509_CHAIN, idx int) int {
+    if !wrapperChainIndexValid(chain, idx) { return 0 }
     return int(C.wolfSSL_get_chain_length(chain, C.int(idx)))
 }
 

@@ -471,3 +471,36 @@ func TestPSKIdentityHintRejectsEmbeddedNUL(t *testing.T) {
         t.Fatalf("use_psk_identity_hint with NUL = %d, want BAD_FUNC_ARG", ret)
     }
 }
+
+func TestChainAccessorsRejectOutOfRangeIndex(t *testing.T) {
+    if WolfSSL_get_chain_length(nil, 0) != 0 || WolfSSL_get_chain_cert(nil, 0) != nil {
+        t.Fatal("nil chain returned data")
+    }
+    p := newTLSTestPair(t)
+    srvRet, cliRet := p.handshake(t)
+    if srvRet != WOLFSSL_SUCCESS || cliRet != WOLFSSL_SUCCESS {
+        t.Fatalf("handshake failed (srv=%d cli=%d)", srvRet, cliRet)
+    }
+    chain := WolfSSL_get_peer_chain(p.cli)
+    if chain == nil {
+        t.Skip("wolfSSL built without SESSION_CERTS")
+    }
+    count := WolfSSL_get_chain_count(chain)
+    if count <= 0 {
+        t.Skip("empty peer chain")
+    }
+    bad := []int{-2, -1, count, count + 1}
+    for _, idx := range bad {
+        if n := WolfSSL_get_chain_length(chain, idx); n != 0 {
+            t.Fatalf("get_chain_length(%d) = %d with count %d", idx, n, count)
+        }
+    }
+    for _, idx := range bad {
+        if der := WolfSSL_get_chain_cert(chain, idx); der != nil {
+            t.Errorf("get_chain_cert(%d) returned %d bytes with count %d", idx, len(der), count)
+        }
+    }
+    if WolfSSL_get_chain_length(chain, 0) <= 0 || WolfSSL_get_chain_cert(chain, 0) == nil {
+        t.Error("in-range index returned no certificate")
+    }
+}

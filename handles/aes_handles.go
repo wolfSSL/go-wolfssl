@@ -109,6 +109,7 @@ func (a *AesGcmAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte
 
 	plaintext := make([]byte, ctLen)
 	if ret := wolfSSL.Wc_AesGcmDecrypt(aes, plaintext, ct, nonce, tag, additionalData); ret != 0 {
+		zeroBytes(plaintext)
 		return nil, errAesGcmAuth
 	}
 	return append(dst, plaintext...), nil

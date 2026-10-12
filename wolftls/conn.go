@@ -468,7 +468,6 @@ func (c *Conn) cleanup() {
 
 // buildConnectionState populates c.connState from the wolfSSL session.
 func (c *Conn) buildConnectionState() error {
-	c.connState.HandshakeComplete = true
 	if c.isClient {
 		// Client: SNI is what we sent; mirror the value from config.
 		c.connState.ServerName = c.config.ServerName
@@ -495,16 +494,29 @@ func (c *Conn) buildConnectionState() error {
 	}
 
 	// Peer certificates
-	c.extractPeerCerts()
-
+	if err := c.extractPeerCerts(); err != nil {
+		c.connState = ConnectionState{}
+		return err
+	}
+	c.connState.HandshakeComplete = true
 	return nil
 }
 
 // extractPeerCerts retrieves the peer certificate chain from wolfSSL as
 // DER-encoded byte slices. Must be called while c.ssl is still valid.
 // The returned slices are Go-owned copies — safe to use after WolfSSL_free.
-func (c *Conn) extractPeerCerts() {
+// It fails when a required peer chain is missing and a callback would inspect it.
+func (c *Conn) extractPeerCerts() error {
 	c.connState.PeerCertificates = wolfSSL.WolfSSL_get_peer_cert_chain_DER(c.ssl)
+	if len(c.connState.PeerCertificates) > 0 {
+		return nil
+	}
+	required := c.isClient || c.config.ClientAuth == RequireAnyClientCert ||
+		c.config.ClientAuth == RequireAndVerifyClientCert
+	if required && (c.config.VerifyPeerCertificate != nil || c.config.VerifyConnection != nil) {
+		return errors.New("wolftls: peer certificate chain unavailable for verification callbacks")
+	}
+	return nil
 }
 
 // ConnectionState returns the state of the TLS connection. If the handshake

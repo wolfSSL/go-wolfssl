@@ -33,6 +33,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
 
 type testChain struct {
@@ -320,5 +322,38 @@ func TestNextProtosRejectsUnencodableEntries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			configRejected(t, &Config{InsecureSkipVerify: true, NextProtos: protos}, true)
 		})
+	}
+}
+
+// TestMissingPeerChainFailsBeforeCallbacks checks that a session with no
+// retrievable peer certificate is rejected before the verification
+// callbacks would see an empty chain.
+func TestMissingPeerChainFailsBeforeCallbacks(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	cfg := &Config{
+		InsecureSkipVerify:    true,
+		VerifyPeerCertificate: func([][]byte) error { return nil },
+	}
+	c := newConn(a, cfg, true)
+	c.ctx = wolfSSL.WolfSSL_CTX_new_v23_client()
+	if c.ctx == nil {
+		t.Fatal("CTX_new failed")
+	}
+	c.ssl = wolfSSL.WolfSSL_new(c.ctx)
+	if c.ssl == nil {
+		c.freeSSL()
+		t.Fatal("WolfSSL_new failed")
+	}
+	defer c.freeSSL()
+
+	if err := c.buildConnectionState(); err == nil {
+		t.Fatal("empty peer chain accepted")
+	}
+	st := c.ConnectionState()
+	if st.HandshakeComplete || st.Version != 0 || st.CipherSuite != "" ||
+		st.ServerName != "" || st.NegotiatedProtocol != "" || st.PeerCertificates != nil {
+		t.Fatalf("failed handshake left connection state %+v", st)
 	}
 }

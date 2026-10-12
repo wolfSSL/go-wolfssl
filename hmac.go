@@ -90,7 +90,7 @@ func Wc_HmacFree(hmac *C.struct_Hmac) {
 }
 
 func Wc_HmacSetKey(hmac *C.struct_Hmac, hash int, key []byte, keySz int) int {
-    if keySz < 0 || keySz > len(key) { return BAD_FUNC_ARG }
+    if keySz < 0 || keySz > len(key) || !wolfcryptFitsWord32(keySz) { return BAD_FUNC_ARG }
     var sanKey *C.uchar
     if len(key) > 0 {
         sanKey = (*C.uchar)(unsafe.Pointer(&key[0]))

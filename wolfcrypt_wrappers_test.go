@@ -773,3 +773,14 @@ func TestAesCbcRejectsOversizedLength(t *testing.T) {
 		t.Fatalf("decrypt: got %d, want %d", ret, BAD_FUNC_ARG)
 	}
 }
+
+func TestHmacSetKeyRejectsOversizedKey(t *testing.T) {
+	skipWithoutSha256(t)
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	hmac := newTestHmac(t)
+	defer freeTestHmac(hmac)
+	if ret := Wc_HmacSetKey(hmac, WC_SHA256, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

@@ -23,7 +23,10 @@ package handles
 import (
 	"bytes"
 	"encoding/pem"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
 )
@@ -260,6 +263,184 @@ func TestParseECPrivateKeyDERAcceptsP256WithoutPublicKey(t *testing.T) {
 	k2.MarkLive()
 	if alg := k2.Algorithm(); alg != AlgECDSAP256 {
 		t.Fatalf("MarkLive on private-only P-256: Algorithm() = %d, want %d", alg, AlgECDSAP256)
+	}
+}
+
+func TestEccKeyConcurrentSignAndFree(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	digest := make([]byte, 32)
+	for i := range digest {
+		digest[i] = byte(i + 1)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 25; j++ {
+				sig, err := SignDigest(k, digest)
+				if err == nil && len(sig) == 0 {
+					t.Error("SignDigest returned an empty signature")
+				}
+			}
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			k.Free()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if k.IsLive() {
+		t.Fatal("key still live after Free")
+	}
+	if _, err := SignDigest(k, digest); err == nil {
+		t.Fatal("SignDigest succeeded on a freed key")
+	}
+}
+
+func TestLockEccKeysSerializesDirectUse(t *testing.T) {
+	k1, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k1.Free()
+	k2, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k2.Free()
+	digest := make([]byte, 32)
+	for i := range digest {
+		digest[i] = byte(i + 1)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			signer, other := k1, k2
+			if i%2 == 1 {
+				signer, other = k2, k1
+			}
+			for j := 0; j < 10; j++ {
+				unlock := LockEccKeys(signer, other, signer)
+				if signer.CKeyPtr() != nil && other.CKeyPtr() != nil {
+					sig := make([]byte, wolfSSL.ECC_MAX_SIG_SIZE)
+					sigLen := len(sig)
+					if ret := wolfSSL.Wc_ecc_sign_hash(digest, len(digest), sig, &sigLen,
+						signer.Rng(), signer.Raw()); ret != 0 {
+						t.Errorf("Wc_ecc_sign_hash: %d", ret)
+					}
+				}
+				unlock()
+			}
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		k1.Free()
+		k2.Free()
+	}()
+	close(start)
+	wg.Wait()
+	if k1.CKeyPtr() != nil || k2.CKeyPtr() != nil {
+		t.Fatal("CKeyPtr non-nil after Free")
+	}
+}
+
+// holdFirstAcquire makes the first locked operation wait inside its key lock
+// until release is closed; entered is closed once it is waiting.
+func holdFirstAcquire(t *testing.T) (entered, release chan struct{}) {
+	entered = make(chan struct{})
+	release = make(chan struct{})
+	var once sync.Once
+	testHookAcquired = func() {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	t.Cleanup(func() { testHookAcquired = nil })
+	return entered, release
+}
+
+// assertBlocked fails if done closes before release is closed, then releases
+// and waits for done.
+func assertBlocked(t *testing.T, done <-chan struct{}, release chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+		t.Fatalf("%s returned while an operation held the key", what)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-done
+}
+
+func TestEccKeyFreeWaitsForInFlightSign(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	digest := make([]byte, 32)
+	for i := range digest {
+		digest[i] = byte(i + 1)
+	}
+	entered, release := holdFirstAcquire(t)
+	signErr := make(chan error, 1)
+	go func() {
+		sig, err := SignDigest(k, digest)
+		if err == nil && len(sig) == 0 {
+			err = errors.New("empty signature")
+		}
+		signErr <- err
+	}()
+	<-entered
+	freed := make(chan struct{})
+	go func() {
+		k.Free()
+		close(freed)
+	}()
+	assertBlocked(t, freed, release, "Free")
+	if err := <-signErr; err != nil {
+		t.Fatalf("in-flight SignDigest: %v", err)
+	}
+	if k.IsLive() || k.Algorithm() != AlgUnknown || k.CKeyPtr() != nil {
+		t.Fatal("freed key still reports live state")
+	}
+	var nilKey *EccKey
+	if nilKey.Algorithm() != AlgUnknown || nilKey.IsLive() {
+		t.Fatal("nil key reports live state")
+	}
+}
+
+func TestEccKeyMarkLiveAfterFreeStaysDead(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	k.Free()
+	k.MarkLive()
+	if k.IsLive() || k.CKeyPtr() != nil {
+		t.Fatal("MarkLive revived a freed key")
+	}
+	if _, err := MarshalSEC1DER(k); err == nil {
+		t.Fatal("MarshalSEC1DER accepted a freed key")
 	}
 }
 

@@ -527,3 +527,59 @@ func TestMakeRsaKeyRejectsSizeOutOfIntRange(t *testing.T) {
 		t.Fatalf("size %d: got %d, want %d", size, ret, BAD_FUNC_ARG)
 	}
 }
+
+// hugeTestSlice maps 4 GiB of inaccessible address space so length checks
+// can be exercised without committing memory; any access faults.
+func hugeTestSlice(t *testing.T) ([]byte, func()) {
+	t.Helper()
+	if strconv.IntSize < 64 {
+		t.Skip("needs 64-bit int")
+	}
+	var n uint64 = 1 << 32
+	b, unmap, err := mapInaccessible(int(n))
+	if err != nil {
+		t.Skipf("cannot reserve address space: %v", err)
+	}
+	return b, unmap
+}
+
+func TestCurve25519ExportRejectsOversizedBuffer(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("needs 64-bit int")
+	}
+	var n uint64 = 1<<32 + 32
+	huge, unmap, err := mapInaccessible(int(n))
+	if err != nil {
+		t.Skipf("cannot reserve address space: %v", err)
+	}
+	defer unmap()
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	priv := make([]byte, 32)
+	if ret := Wc_curve25519_make_priv(rng, priv); ret == notCompiledE {
+		t.Skip("Curve25519 not compiled")
+	} else if ret != 0 {
+		t.Fatalf("Wc_curve25519_make_priv: %d", ret)
+	}
+	key := new(Curve25519_key)
+	if ret := Wc_curve25519_init(key); ret != 0 {
+		t.Fatalf("Wc_curve25519_init: %d", ret)
+	}
+	defer Wc_curve25519_free(key)
+	if ret := Wc_curve25519_import_private(priv, key); ret != 0 {
+		t.Fatalf("Wc_curve25519_import_private: %d", ret)
+	}
+	if ret := Wc_curve25519_export_private_raw_ex(key, huge, EC25519_LITTLE_ENDIAN); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}
+
+func TestRngGenerateBlockRejectsOversizedLength(t *testing.T) {
+	huge, unmap := hugeTestSlice(t)
+	defer unmap()
+	rng := newTestRNG(t)
+	defer Wc_RNG_Free(rng)
+	if ret := Wc_RNG_GenerateBlock(rng, huge, len(huge)); ret != BAD_FUNC_ARG {
+		t.Fatalf("got %d, want %d", ret, BAD_FUNC_ARG)
+	}
+}

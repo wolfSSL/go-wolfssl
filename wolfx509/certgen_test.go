@@ -679,3 +679,24 @@ func TestCreateCertificateRejectsNonPositiveSerial(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateCertificateRejectsCommonNameWithNUL(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "good.example\x00evil.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+		t.Error("CreateCertificate accepted a CommonName containing NUL")
+	}
+	if _, err := CreateCertificateRequest(&CertificateRequest{Subject: tmpl.Subject}, k); err == nil {
+		t.Error("CreateCertificateRequest accepted a CommonName containing NUL")
+	}
+}

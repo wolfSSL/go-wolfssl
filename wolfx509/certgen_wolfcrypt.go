@@ -72,6 +72,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -191,6 +192,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 	if max := int(C.CTC_NAME_SIZE); len(opts.SubjectCN) >= max {
 		return nil, fmt.Errorf("wolfx509: SubjectCN %d bytes >= %d max", len(opts.SubjectCN), max)
+	}
+	if strings.IndexByte(opts.SubjectCN, 0) >= 0 {
+		return nil, errors.New("wolfx509: SubjectCN contains a NUL byte")
 	}
 
 	sigType, err := sigTypeFor(pubKey.Algorithm())

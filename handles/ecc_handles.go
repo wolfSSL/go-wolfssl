@@ -36,6 +36,14 @@ import (
 
 // TODO: Remove "encoding/pem" and replace with wolfSSL ASN parsing
 
+// zeroBytes wipes temporary buffers holding secrets. Best effort only: the
+// Go runtime may already have copied the bytes elsewhere.
+var zeroBytes = func(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // Algorithm names a wolfCrypt key class.
 type Algorithm int
 
@@ -405,12 +413,13 @@ func ParseECPrivateKeyPEM(p []byte) (*EccKey, error) {
 	if len(p) == 0 {
 		return nil, errors.New("handles: empty EC private key PEM")
 	}
-	der := make([]byte, len(p))
-	n := wolfSSL.Wc_KeyPemToDer(p, der, "")
+	buf := make([]byte, len(p))
+	defer zeroBytes(buf)
+	n := wolfSSL.Wc_KeyPemToDer(p, buf, "")
 	if n < 0 {
 		return nil, fmt.Errorf("wolfCrypt: wc_KeyPemToDer: %d", n)
 	}
-	der = der[:n]
+	der := buf[:n]
 	k, err := ParseECPrivateKeyDER(der)
 	if err == nil || err == errNotP256 {
 		return k, err

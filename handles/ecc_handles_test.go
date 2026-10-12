@@ -468,3 +468,61 @@ func TestEccKeyAlgorithmDerivesOnlyMissingPublicPoint(t *testing.T) {
 		t.Fatalf("eccKeyAlgorithm(P-256 public key) = (%d, %d), want (AlgECDSAP256, 0)", alg, ret)
 	}
 }
+
+// recordZeroBytes replaces zeroBytes for the duration of the test and returns
+// a function reporting every buffer passed to it.
+func recordZeroBytes(t *testing.T) func() [][]byte {
+	var mu sync.Mutex
+	var wiped [][]byte
+	orig := zeroBytes
+	zeroBytes = func(b []byte) {
+		orig(b)
+		mu.Lock()
+		wiped = append(wiped, b)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { zeroBytes = orig })
+	return func() [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return wiped
+	}
+}
+
+func allZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestParseECPrivateKeyPEMWipesDER(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	for _, marshal := range []func(*EccKey) ([]byte, error){MarshalSEC1PEM, MarshalPKCS8PEM} {
+		p, err := marshal(k)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		wiped := recordZeroBytes(t)
+		k2, err := ParseECPrivateKeyPEM(p)
+		if err != nil {
+			t.Fatalf("ParseECPrivateKeyPEM: %v", err)
+		}
+		k2.Free()
+		found := false
+		for _, b := range wiped() {
+			if len(b) == len(p) && allZero(b) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("decoded private-key DER buffer was not wiped")
+		}
+	}
+}

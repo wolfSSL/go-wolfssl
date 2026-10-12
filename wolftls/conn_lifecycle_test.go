@@ -21,6 +21,9 @@
 package wolftls
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -325,4 +328,427 @@ func tcpPair(t *testing.T) (client, server net.Conn) {
 		t.Fatal("accept failed")
 	}
 	return client, server
+}
+
+// timeoutError is a net.Error that reports a deadline expiry.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+func TestClassifyWriteFailure(t *testing.T) {
+	var timeout error = timeoutError{}
+	cases := []struct {
+		name         string
+		errCode      int
+		transportErr error
+		dead, retry  bool
+	}{
+		{"timeout with record pending", sslErrorWantWrite, timeout, true, false},
+		{"wrapped timeout", sslErrorWantWrite, fmt.Errorf("w: %w", timeout), true, false},
+		{"transport stall", sslErrorWantWrite, nil, false, true},
+		{"wolfSSL wants input", sslErrorWantRead, nil, false, false},
+		{"wolfSSL wants input after a timeout", sslErrorWantRead, timeout, false, false},
+	}
+	for _, tc := range cases {
+		dead, retry := classifyWriteFailure(tc.errCode, tc.transportErr)
+		if dead != tc.dead || retry != tc.retry {
+			t.Errorf("%s: dead=%v retry=%v, want dead=%v retry=%v", tc.name, dead, retry, tc.dead, tc.retry)
+		}
+	}
+}
+
+// stallOnceConn returns (0, nil) from the first Write made while armed.
+type stallOnceConn struct {
+	net.Conn
+	armed int32
+}
+
+func (s *stallOnceConn) Write(b []byte) (int, error) {
+	if atomic.CompareAndSwapInt32(&s.armed, 1, 0) {
+		return 0, nil
+	}
+	return s.Conn.Write(b)
+}
+
+func TestWriteStallWithoutTimeoutIsRetried(t *testing.T) {
+	var sc *stallOnceConn
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		sc = &stallOnceConn{Conn: c}
+		return sc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&sc.armed, 1)
+	if _, err := cli.Write([]byte("first")); err != nil {
+		t.Fatalf("Write after a transport stall: %v", err)
+	}
+	if _, err := cli.Write([]byte("second")); err != nil {
+		t.Fatalf("later Write: %v", err)
+	}
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, len("firstsecond"))
+	if _, err := io.ReadFull(srv, got); err != nil || string(got) != "firstsecond" {
+		t.Fatalf("server read %q: %v", got, err)
+	}
+}
+
+// emptyConn returns (0, nil) from every Read and Write made while armed.
+type emptyConn struct {
+	net.Conn
+	reads, writes int32
+}
+
+func (e *emptyConn) Read(b []byte) (int, error) {
+	if atomic.LoadInt32(&e.reads) == 1 {
+		return 0, nil
+	}
+	return e.Conn.Read(b)
+}
+
+func (e *emptyConn) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&e.writes) == 1 {
+		return 0, nil
+	}
+	return e.Conn.Write(b)
+}
+
+func TestWriteWithoutProgressFails(t *testing.T) {
+	var ec *emptyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &emptyConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&ec.writes, 1)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Write([]byte("stuck"))
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if !errors.Is(err, io.ErrNoProgress) {
+			t.Fatalf("Write err = %v, want io.ErrNoProgress", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Write kept retrying a transport that makes no progress")
+	}
+	if _, err := cli.Write([]byte("later")); err == nil {
+		t.Fatal("Write succeeded after a possibly half-sent record")
+	}
+}
+
+// readCounter counts transport Reads and signals each one.
+type readCounter struct {
+	net.Conn
+	reads   int32
+	entered chan struct{}
+}
+
+func (r *readCounter) Read(b []byte) (int, error) {
+	atomic.AddInt32(&r.reads, 1)
+	select {
+	case r.entered <- struct{}{}:
+	default:
+	}
+	return r.Conn.Read(b)
+}
+
+func TestSharedSessionInputPumpTakesTurns(t *testing.T) {
+	var rcnt *readCounter
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		rcnt = &readCounter{Conn: c, entered: make(chan struct{}, 1)}
+		return rcnt
+	})
+	defer cleanup()
+	if cli.sslMu == nil {
+		t.Skip("write dup splits the session; no shared input pump")
+	}
+	rc := cli.conn.(*recordingConn)
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+
+	// Drain post-handshake messages, then park a Read in the pump.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	for len(rcnt.entered) > 0 {
+		<-rcnt.entered
+	}
+	gen := rc.fillCount()
+	readDone := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 4)
+		n, _ := io.ReadFull(cli, buf)
+		readDone <- string(buf[:n])
+	}()
+	select {
+	case <-rcnt.entered:
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read never waited on the transport")
+	}
+	readsBefore := atomic.LoadInt32(&rcnt.reads)
+
+	// A writer needing input queues behind the parked Read instead of
+	// reading the transport itself, and returns once that input lands.
+	pumped := make(chan error, 1)
+	go func() { pumped <- cli.pumpInput(rc, gen) }()
+	if _, err := srv.Write([]byte("data")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	select {
+	case err := <-pumped:
+		if err != nil {
+			t.Fatalf("pump: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("writer pump did not return after input arrived")
+	}
+	select {
+	case got := <-readDone:
+		if got != "data" {
+			t.Fatalf("Read got %q", got)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read did not complete")
+	}
+	if extra := atomic.LoadInt32(&rcnt.reads) - readsBefore; extra != 0 {
+		t.Fatalf("writer pump read the transport %d extra times", extra)
+	}
+}
+
+func TestSendTimeoutClosesWritesInsideWolfSSLCall(t *testing.T) {
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	rc := cli.conn.(*recordingConn)
+
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	chunk := make([]byte, 16384)
+	failed := false
+	for i := 0; i < 4096 && !failed; i++ {
+		n, _ := cli.writeRecord(chunk)
+		failed = n <= 0
+	}
+	if !failed {
+		t.Fatal("write deadline never fired")
+	}
+	// No Write bookkeeping has run yet; a concurrent Read must already be
+	// unable to flush the half-sent record.
+	if !rc.writeClosed() {
+		t.Fatal("transport timeout left writes open after WolfSSL_write returned")
+	}
+}
+
+func TestReadAfterWriteTimeoutSendsNothing(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	// Consume post-handshake messages so closing the client does not reset
+	// the connection and discard what the server has yet to read.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+
+	const chunk = 16384
+	var want []byte
+	var err error
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	for i := 0; i < 2048 && err == nil; i++ {
+		msg := bytes.Repeat([]byte{byte(i)}, chunk)
+		var n int
+		n, err = cli.Write(msg)
+		want = append(want, msg[:n]...)
+	}
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	cli.SetWriteDeadline(time.Time{})
+
+	// A KeyUpdate request makes the client's Read want to send a reply.
+	srv.muWrite.Lock()
+	ret := sslRequestKeyUpdate(srv.sslWrite)
+	srv.muWrite.Unlock()
+	if ret != 1 {
+		t.Skipf("key update unavailable (%d)", ret)
+	}
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+
+	type result struct {
+		got   []byte
+		err   error
+		extra int
+	}
+	done := make(chan result, 1)
+	go func() {
+		srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		got := make([]byte, len(want))
+		_, err := io.ReadFull(srv, got)
+		extra := 0
+		if err == nil {
+			extra, _ = srv.Read(make([]byte, 1))
+		}
+		done <- result{got, err, extra}
+	}()
+	cli.Read(make([]byte, 4))
+	cli.Close()
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("server read of the reported bytes: %v", r.err)
+	}
+	if !bytes.Equal(r.got, want) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if r.extra != 0 {
+		t.Fatal("server received plaintext that Write reported as unsent")
+	}
+}
+
+func TestLargeWriteTimeoutReportsDeliveredBytes(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	// Consume post-handshake messages so closing the client does not reset
+	// the connection and discard what the server has yet to read.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+
+	big := make([]byte, 64<<20)
+	for i := range big {
+		big[i] = byte(i / 16384)
+	}
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	n, err := cli.Write(big)
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	if n == 0 || n == len(big) {
+		t.Fatalf("Write reported %d of %d bytes; want a partial count", n, len(big))
+	}
+	cli.Close()
+
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, n)
+	if m, err := io.ReadFull(srv, got); err != nil {
+		t.Fatalf("server read %d of %d reported bytes: %v", m, n, err)
+	}
+	if !bytes.Equal(got, big[:n]) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if m, err := srv.Read(make([]byte, 1)); m != 0 || err == nil {
+		t.Fatalf("server received bytes beyond the %d Write reported (m=%d err=%v)", n, m, err)
+	}
+}
+
+// wrapErrConn wraps every transport error with %w, as net.Conn decorators do.
+type wrapErrConn struct{ net.Conn }
+
+func (w wrapErrConn) Read(b []byte) (int, error) {
+	n, err := w.Conn.Read(b)
+	if err != nil {
+		err = fmt.Errorf("wrapped read: %w", err)
+	}
+	return n, err
+}
+
+func (w wrapErrConn) Write(b []byte) (int, error) {
+	n, err := w.Conn.Write(b)
+	if err != nil {
+		err = fmt.Errorf("wrapped write: %w", err)
+	}
+	return n, err
+}
+
+func TestWrappedWriteTimeoutIsRecognized(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return wrapErrConn{c} })
+	defer cleanup()
+
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	var err error
+	msg := make([]byte, 16384)
+	for i := 0; i < 2048 && err == nil; i++ {
+		_, err = cli.Write(msg)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("wrapped write deadline error is not a timeout: %v", err)
+	}
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cli, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client read after wrapped write timeout %q: %v", reply, err)
+	}
+}
+
+func TestWriteTimeoutKeepsStreamConsistent(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	const chunk = 16384
+	var want []byte
+	var err error
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	for i := 0; i < 2048; i++ {
+		msg := bytes.Repeat([]byte{byte(i)}, chunk)
+		var n int
+		n, err = cli.Write(msg)
+		want = append(want, msg[:n]...)
+		if err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("write deadline error is not a timeout: %v", err)
+	}
+	cli.SetWriteDeadline(time.Time{})
+
+	if n, err := cli.Write([]byte("different payload")); err == nil || n != 0 {
+		t.Fatalf("Write after a timed-out record: n=%d err=%v, want the timeout again", n, err)
+	}
+
+	// The read side is unaffected by the write timeout.
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cli, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client read after write timeout %q: %v", reply, err)
+	}
+
+	// The peer gets exactly the bytes Write reported, then no clean close.
+	cli.Close()
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, len(want))
+	if n, err := io.ReadFull(srv, got); err != nil {
+		t.Fatalf("server read %d of %d reported bytes: %v", n, len(want), err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatalf("after the reported bytes: n=%d err=%v, want the stream to end", n, err)
+	}
 }

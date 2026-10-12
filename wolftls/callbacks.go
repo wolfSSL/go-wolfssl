@@ -42,6 +42,15 @@ package wolftls
 //     return wolftlsIOSend((void*)ssl, buf, sz, ctx);
 // }
 //
+// static inline int wolftls_update_keys(WOLFSSL* ssl) {
+// #ifdef WOLFSSL_TLS13
+//     return wolfSSL_update_keys(ssl);
+// #else
+//     (void)ssl;
+//     return NOT_COMPILED_IN;
+// #endif
+// }
+//
 // /* SNI callback trampoline. exArg carries the Go connID; the Go
 //  * callback's return is mapped to wolfSSL's switch/return convention:
 //  *   0 -> success (default case)
@@ -96,6 +105,7 @@ package wolftls
 import "C"
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -117,7 +127,10 @@ const (
 	cbioErrTimeout   = -6
 )
 
-const sslErrorWantRead = int(C.WOLFSSL_ERROR_WANT_READ)
+const (
+	sslErrorWantRead  = int(C.WOLFSSL_ERROR_WANT_READ)
+	sslErrorWantWrite = int(C.WOLFSSL_ERROR_WANT_WRITE)
+)
 
 // ------------------------------------------------------------------
 // I/O callback registry: route wolfSSL record I/O through a Go net.Conn
@@ -215,12 +228,18 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 		}
 		// Hitting the user set deadline for the read has no implication
 		// for the underlying TCP connection. Loop with WANT_READ.
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		if isTimeout(err) {
 			return C.int(cbioErrWantRead)
 		}
 		return C.int(cbioErrGeneral)
 	}
 	return C.int(cbioErrWantRead)
+}
+
+// isTimeout reports whether err, or any error it wraps, is a net.Error timeout.
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 //export wolftlsIOSend
@@ -236,15 +255,43 @@ func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 		return C.int(cbioErrGeneral)
 	}
 
+	// Nothing more may reach the peer once a record was left half-sent.
+	if rc, ok := ic.conn.(*recordingConn); ok && rc.writeClosed() {
+		return C.int(cbioErrWantWrite)
+	}
 	goBuf := C.GoBytes(unsafe.Pointer(buf), sz)
 	n, err := guardTransport(ic.conn, func() (int, error) { return ic.conn.Write(goBuf) })
 	if n > 0 {
 		return C.int(n)
 	}
 	if err != nil {
+		if isTimeout(err) {
+			// Close writes while wolfSSL still holds the session, so no other
+			// caller can flush the half-sent record.
+			if rc, ok := ic.conn.(*recordingConn); ok {
+				rc.closeWrites(err)
+			}
+			return C.int(cbioErrWantWrite)
+		}
 		return C.int(cbioErrConnClose)
 	}
 	return C.int(cbioErrWantWrite)
+}
+
+// sslMaxPlaintext returns the most plaintext one record carries on a
+// handshaken ssl.
+func sslMaxPlaintext(ssl *wolfSSL.WOLFSSL) int {
+	n := int(C.wolfSSL_GetMaxOutputSize((*C.WOLFSSL)(unsafe.Pointer(ssl))))
+	if n <= 0 || n > 16384 {
+		return 16384
+	}
+	return n
+}
+
+// sslRequestKeyUpdate sends a TLS 1.3 KeyUpdate that asks the peer to
+// respond; it returns WOLFSSL_SUCCESS or a negative error.
+func sslRequestKeyUpdate(ssl *wolfSSL.WOLFSSL) int {
+	return int(C.wolftls_update_keys((*C.WOLFSSL)(unsafe.Pointer(ssl))))
 }
 
 // ctxSetIOCallbacks installs the I/O trampolines on a WOLFSSL_CTX.

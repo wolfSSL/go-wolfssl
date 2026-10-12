@@ -46,12 +46,34 @@ import (
 // the DERP reconnect loop fixed alongside this type.
 type recordingConn struct {
 	net.Conn
-	mu          sync.Mutex
-	lastReadErr error
+	mu           sync.Mutex
+	lastReadErr  error
+	lastWriteErr error
 	// buffered: Read and Write share one WOLFSSL, so Conn.Read waits on the
 	// transport outside the session lock and the recv callback serves pending.
 	buffered bool
 	pending  []byte
+	fills    uint64
+	// writeDeadErr, once a send times out, stops every later transport write.
+	writeDeadErr error
+}
+
+func (r *recordingConn) closeWrites(err error) {
+	r.mu.Lock()
+	if r.writeDeadErr == nil {
+		r.writeDeadErr = err
+	}
+	r.mu.Unlock()
+}
+
+func (r *recordingConn) writeClosed() bool {
+	return r.deadWriteErr() != nil
+}
+
+func (r *recordingConn) deadWriteErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.writeDeadErr
 }
 
 func (r *recordingConn) Read(b []byte) (int, error) {
@@ -62,6 +84,24 @@ func (r *recordingConn) Read(b []byte) (int, error) {
 		r.mu.Unlock()
 	}
 	return n, err
+}
+
+func (r *recordingConn) Write(b []byte) (int, error) {
+	n, err := r.Conn.Write(b)
+	if err != nil {
+		r.mu.Lock()
+		r.lastWriteErr = err
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+func (r *recordingConn) takeLastWriteErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	err := r.lastWriteErr
+	r.lastWriteErr = nil
+	return err
 }
 
 func (r *recordingConn) setBuffered() {
@@ -91,11 +131,22 @@ func (r *recordingConn) fill(b []byte) error {
 	n, err := guardTransport(r.Conn, func() (int, error) { return r.Conn.Read(b) })
 	if n > 0 {
 		r.mu.Lock()
+		r.fills++
 		r.pending = append(r.pending, b[:n]...)
 		r.mu.Unlock()
 		return nil
 	}
 	return err
+}
+
+// maxEmptyTransportOps bounds retries of a transport that makes no progress,
+// matching bufio's limit before io.ErrNoProgress.
+const maxEmptyTransportOps = 100
+
+func (r *recordingConn) fillCount() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fills
 }
 
 func (r *recordingConn) takeLastReadErr() error {
@@ -131,6 +182,15 @@ type Conn struct {
 	muWrite *sync.Mutex
 	sslMu   *sync.Mutex
 	rbuf    []byte
+	// pumpMu lets Read and Write take turns waiting on the transport for
+	// the shared session; it guards rbuf.
+	pumpMu sync.Mutex
+	// brokenWrite is set when a record could not be finished before a write
+	// timeout; later writes fail with it, as in crypto/tls. Guarded by muWrite.
+	brokenWrite error
+	// writeChunk caps each WolfSSL_write at one record so a timeout can
+	// only strand the record in flight.
+	writeChunk int
 
 	// wolfSSL objects — created during handshake
 	ctx      *wolfSSL.WOLFSSL_CTX
@@ -480,6 +540,7 @@ func (c *Conn) doHandshake() error {
 	// otherwise share one session under sslMu and buffer transport input.
 	c.muRead = &sync.Mutex{}
 	c.muWrite = &sync.Mutex{}
+	c.writeChunk = sslMaxPlaintext(c.ssl)
 	if dup := wolfSSL.WolfSSL_write_dup(c.ssl); dup != nil {
 		c.sslWrite = dup
 	} else {
@@ -563,14 +624,16 @@ func (c *Conn) Read(b []byte) (int, error) {
 	c.muRead.Lock()
 	defer c.muRead.Unlock()
 	rc, _ := c.conn.(*recordingConn)
+	var gen uint64
+	if rc != nil {
+		gen = rc.fillCount()
+	}
 	n, errCode := c.readRecord(b)
 	for n <= 0 && c.sslMu != nil && rc != nil && errCode == sslErrorWantRead {
-		if c.rbuf == nil {
-			c.rbuf = make([]byte, 16384)
-		}
-		if err := rc.fill(c.rbuf); err != nil {
+		if err := c.pumpInput(rc, gen); err != nil {
 			return 0, err
 		}
+		gen = rc.fillCount()
 		n, errCode = c.readRecord(b)
 	}
 	if n > 0 {
@@ -586,6 +649,20 @@ func (c *Conn) Read(b []byte) (int, error) {
 	}
 	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 	return 0, fmt.Errorf("wolftls: read error: %s (%d)", errMsg, errCode)
+}
+
+// pumpInput waits for more transport input for the shared session, unless
+// input already arrived after gen was sampled.
+func (c *Conn) pumpInput(rc *recordingConn, gen uint64) error {
+	c.pumpMu.Lock()
+	defer c.pumpMu.Unlock()
+	if rc.fillCount() != gen {
+		return nil
+	}
+	if c.rbuf == nil {
+		c.rbuf = make([]byte, 16384)
+	}
+	return rc.fill(c.rbuf)
 }
 
 // readRecord runs one WolfSSL_read and returns its result and error code.
@@ -630,16 +707,93 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 	c.muWrite.Lock()
 	defer c.muWrite.Unlock()
+	rc, _ := c.conn.(*recordingConn)
+	if rc != nil {
+		rc.takeLastWriteErr()
+	}
+	if c.brokenWrite == nil && rc != nil {
+		c.brokenWrite = rc.deadWriteErr()
+	}
+	if c.brokenWrite != nil {
+		return 0, c.brokenWrite
+	}
 	total := 0
+	stalls := 0
 	for total < len(b) {
-		n, errCode := c.writeRecord(b[total:])
-		if n <= 0 {
-			errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
-			return total, fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
+		end := len(b)
+		if end-total > c.writeChunk {
+			end = total + c.writeChunk
 		}
-		total += n
+		var gen uint64
+		if rc != nil {
+			gen = rc.fillCount()
+		}
+		n, errCode := c.writeRecord(b[total:end])
+		if n > 0 {
+			total += n
+			stalls = 0
+			continue
+		}
+		// The shared session needs peer input before it can write; nothing of
+		// the chunk is sealed yet, so wait for input and retry the same chunk.
+		if errCode == sslErrorWantRead && c.sslMu != nil && rc != nil {
+			if err := c.pumpInput(rc, gen); err != nil {
+				return total, err
+			}
+			continue
+		}
+		var transportErr error
+		if rc != nil {
+			transportErr = rc.takeLastWriteErr()
+		}
+		dead, retry := classifyWriteFailure(errCode, transportErr)
+		if rc != nil && rc.writeClosed() {
+			dead, retry = true, false
+			if transportErr == nil {
+				transportErr = rc.deadWriteErr()
+			}
+		}
+		if retry {
+			if stalls++; stalls < maxEmptyTransportOps {
+				runtime.Gosched()
+				continue
+			}
+			// The record may be half sent, so a stuck transport ends writes.
+			dead, transportErr = true, io.ErrNoProgress
+		}
+		err := writeError(errCode, transportErr)
+		if dead {
+			c.brokenWrite = err
+			if rc != nil {
+				rc.closeWrites(err)
+			}
+		}
+		return total, err
 	}
 	return total, nil
+}
+
+// classifyWriteFailure: a transport timeout strands a half-sent record, so
+// writes go dead; a stall with no transport error retries the same chunk;
+// WANT_READ comes before any of the chunk is sealed, so later writes proceed.
+func classifyWriteFailure(errCode int, transportErr error) (dead, retrySame bool) {
+	if errCode != sslErrorWantWrite {
+		return false, false
+	}
+	if transportErr == nil {
+		return false, true
+	}
+	return isTimeout(transportErr), false
+}
+
+// writeError reports a failed WolfSSL_write, preferring the transport's own
+// error (such as a net.Error timeout) when wolfSSL only wants to write again.
+func writeError(errCode int, transportErr error) error {
+	if transportErr != nil && errCode == sslErrorWantWrite {
+		return transportErr
+	}
+	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
+	return fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
 }
 
 // Close shuts down the TLS connection and closes the underlying transport.
@@ -754,7 +908,10 @@ func (c *Conn) freeSSLLocked() {
 		if c.sslWrite != nil {
 			shutdownSSL = c.sslWrite
 		}
-		wolfSSL.WolfSSL_shutdown(shutdownSSL)
+		// close_notify would also flush a record that Write reported as unsent.
+		if c.brokenWrite == nil {
+			wolfSSL.WolfSSL_shutdown(shutdownSSL)
+		}
 		if c.conn != nil {
 			c.conn.SetDeadline(time.Time{}) // clear deadline
 		}

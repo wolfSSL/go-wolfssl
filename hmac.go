@@ -22,6 +22,7 @@ package wolfSSL
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hmac.h>
+// #include <wolfssl/wolfcrypt/error-crypt.h>
 // #ifdef _WIN32
 // #include <stdlib.h>
 // #include <malloc.h>
@@ -53,6 +54,7 @@ package wolfSSL
 //                             const byte* info, word32 infoSz,
 //                             byte* out, word32 outSz)
 // {
+// #ifdef HAVE_HKDF
 //     int ret;
 //     int lockRet;
 //     ret = wc_go_PrivateKeyUnlock();
@@ -64,6 +66,11 @@ package wolfSSL
 //             ret = lockRet;
 //     }
 //     return ret;
+// #else
+//     (void)type; (void)inKey; (void)inKeySz; (void)salt; (void)saltSz;
+//     (void)info; (void)infoSz; (void)out; (void)outSz;
+//     return NOT_COMPILED_IN;
+// #endif
 // }
 import "C"
 import (

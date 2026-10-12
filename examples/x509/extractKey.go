@@ -81,7 +81,10 @@ func main() {
 	fmt.Printf("%x\n", pubBuf)
 
 	digest := make([]byte, wolfSSL.WC_SHA384_DIGEST_SIZE )
-        wolfSSL.Wc_Sha384Hash(pubBuf, pubLen, digest)
+	if ret = wolfSSL.Wc_Sha384Hash(pubBuf, pubLen, digest); ret != 0 {
+		fmt.Fprintln(os.Stderr, "Failed to hash public key DER:", ret)
+		os.Exit(1)
+	}
 	fmt.Printf("SHA484 hash of public key DER\n")
 	fmt.Printf("%x\n", digest)
 

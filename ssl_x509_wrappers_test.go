@@ -24,6 +24,7 @@
 package wolfSSL
 
 import (
+    "encoding/pem"
     "os"
     "syscall"
     "testing"
@@ -48,6 +49,15 @@ func readTestFile(t *testing.T, name string) []byte {
         t.Fatalf("read %s: %v", name, err)
     }
     return b
+}
+
+func readTestCertDER(t *testing.T, name string) []byte {
+    t.Helper()
+    block, _ := pem.Decode(readTestFile(t, name))
+    if block == nil {
+        t.Fatalf("no PEM block in %s", name)
+    }
+    return block.Bytes
 }
 
 func newTLSTestPair(t *testing.T) *tlsTestPair {
@@ -161,5 +171,28 @@ func TestALPNContinueOnMismatchCompletesHandshake(t *testing.T) {
     srvRet, cliRet := p.handshake(t)
     if srvRet != WOLFSSL_SUCCESS || cliRet != WOLFSSL_SUCCESS {
         t.Fatalf("handshake failed (srv=%d cli=%d)", srvRet, cliRet)
+    }
+}
+
+func requireOpenSSLExtra(t *testing.T, der []byte) {
+    t.Helper()
+    x := WolfSSL_X509_load_certificate_buffer(der, len(der), SSL_FILETYPE_ASN1)
+    if x == nil {
+        t.Skip("wolfSSL built without OPENSSL_EXTRA")
+    }
+    WolfSSL_X509_free(x)
+}
+
+func TestD2iX509ParsesDER(t *testing.T) {
+    der := readTestCertDER(t, "ca-cert.pem")
+    requireOpenSSLExtra(t, der)
+    x := WolfSSL_d2i_X509(der)
+    if x == nil {
+        t.Fatal("WolfSSL_d2i_X509 failed on a valid certificate")
+    }
+    defer WolfSSL_X509_free(x)
+    var out []byte
+    if n := WolfSSL_i2d_X509(x, &out); n <= 0 || string(out) != string(der) {
+        t.Fatalf("re-encoded DER differs from input (n=%d)", n)
     }
 }

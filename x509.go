@@ -396,9 +396,10 @@ func WolfSSL_d2i_X509(der []byte) *WOLFSSL_X509 {
 	if len(der) == 0 {
 		return nil
 	}
-	in := (*C.uchar)(unsafe.Pointer(&der[0]))
-	pp := &in
-	return C.wolfSSL_d2i_X509(nil, (**C.uchar)(unsafe.Pointer(pp)), C.int(len(der)))
+	cBuf := C.CBytes(der)
+	defer C.free(cBuf)
+	cIn := (*C.uchar)(cBuf)
+	return C.wolfSSL_d2i_X509(nil, &cIn, C.int(len(der)))
 }
 
 // WolfSSL_X509_get_subject_name returns the Subject DN. The returned pointer

@@ -1143,3 +1143,113 @@ func TestHandshakeContextKeepsHandshakeError(t *testing.T) {
 		t.Fatalf("got %v, want both context.Canceled and the callback error", err)
 	}
 }
+
+func TestConnectionStateDuringHandshake(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+	go srv.Handshake()
+
+	done := make(chan error, 1)
+	go func() { done <- cli.Handshake() }()
+	var hsErr error
+	finished := false
+	deadline := time.After(lifecycleTimeout)
+	for !finished {
+		cli.ConnectionState()
+		select {
+		case hsErr = <-done:
+			finished = true
+		case <-deadline:
+			cConn.Close()
+			t.Fatal("handshake did not complete")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if hsErr != nil {
+		t.Fatalf("handshake: %v", hsErr)
+	}
+	if !cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState not populated after handshake")
+	}
+}
+
+func TestConnectionStateFromVerifyCallback(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	var cli *Conn
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		cli.ConnectionState()
+		return nil
+	}
+	cli = Client(cConn, cfg)
+	done := make(chan error, 1)
+	go func() { done <- cli.Handshake() }()
+	select {
+	case err := <-done:
+		cli.Close()
+		if err != nil {
+			t.Fatalf("handshake: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("ConnectionState blocked inside VerifyConnection")
+	}
+}
+
+func TestConnectionStateNotCompleteUntilVerified(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	var cli *Conn
+	sawComplete := false
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		sawComplete = cli.ConnectionState().HandshakeComplete
+		return errVerifySentinel
+	}
+	cli = Client(cConn, cfg)
+	defer cli.Close()
+
+	if err := cli.Handshake(); !errors.Is(err, errVerifySentinel) {
+		t.Fatalf("handshake: got %v, want the verification error", err)
+	}
+	if sawComplete {
+		t.Fatal("ConnectionState reported a complete handshake while verification was pending")
+	}
+	if cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState reports a complete handshake after verification failed")
+	}
+}
+
+func TestAbortedHandshakeStateNotPublished(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+
+	atomic.StoreInt32(&cli.handshakeState, hsAborted)
+	if err := cli.Handshake(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("got %v, want net.ErrClosed", err)
+	}
+	if cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState reports an aborted handshake as complete")
+	}
+}

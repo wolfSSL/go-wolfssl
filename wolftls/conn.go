@@ -240,8 +240,11 @@ type Conn struct {
 	ioConnID      int
 	certCbID int
 
-	// populated after handshake
-	connState ConnectionState
+	// populated after handshake; publishedState is the copy ConnectionState
+	// reads under stateMu
+	connState      ConnectionState
+	stateMu        sync.RWMutex
+	publishedState ConnectionState
 }
 
 func newConn(conn net.Conn, config *Config, isClient bool) *Conn {
@@ -274,6 +277,9 @@ func (c *Conn) Handshake() error {
 	if !atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsFinished) && c.handshakeErr == nil {
 		c.cleanup()
 		c.handshakeErr = net.ErrClosed
+	}
+	if c.handshakeErr == nil {
+		c.publishConnectionState()
 	}
 	return c.handshakeErr
 }
@@ -683,7 +689,16 @@ func (c *Conn) extractPeerCerts() {
 // ConnectionState returns the state of the TLS connection. If the handshake
 // has not yet completed, it returns a zero-value ConnectionState.
 func (c *Conn) ConnectionState() ConnectionState {
-	return c.connState
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.publishedState
+}
+
+// publishConnectionState makes connState visible to ConnectionState.
+func (c *Conn) publishConnectionState() {
+	c.stateMu.Lock()
+	c.publishedState = c.connState
+	c.stateMu.Unlock()
 }
 
 // Read reads data from the TLS connection. If the handshake has not yet

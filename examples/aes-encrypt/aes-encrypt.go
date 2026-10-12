@@ -172,7 +172,6 @@ func AesEncrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
 }
 
 func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
-    var rng    wolfSSL.WC_RNG
     var output []byte
     var iv     []byte = make([]byte, wolfSSL.AES_BLOCK_SIZE)
     var salt   []byte = make([]byte, SALT_SIZE)
@@ -210,14 +209,8 @@ func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
         i++
     }
 
-    ret := wolfSSL.Wc_InitRng(&rng)
-    if ret != 0 {
-        fmt.Println("Failed to initialize RNG")
-        os.Exit(1)
-    }
-
     derivedKey := make([]byte, size)
-    ret = wolfSSL.Wc_PBKDF2(derivedKey, key, len(key), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
+    ret := wolfSSL.Wc_PBKDF2(derivedKey, key, len(key), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
     if ret != 0 {
         fmt.Println("Failed to stretch key")
         os.Exit(1)
@@ -274,12 +267,6 @@ func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
     _, err = out.Write(output[0:length])
     if err != nil {
         println(err.Error())
-        os.Exit(1)
-    }
-
-    ret = wolfSSL.Wc_FreeRng(&rng)
-    if ret != 0 {
-        fmt.Println("Failed to free RNG")
         os.Exit(1)
     }
 }

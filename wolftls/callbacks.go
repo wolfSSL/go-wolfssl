@@ -28,18 +28,18 @@ package wolftls
 // #include <string.h>
 //
 // /* Forward declarations — implemented in Go via //export. */
-// extern int wolftlsIORecv(void* ssl, char* buf, int sz, void* ctx);
-// extern int wolftlsIOSend(void* ssl, char* buf, int sz, void* ctx);
+// extern int wolftlsIORecv(void* ssl, char* buf, int sz, uintptr_t connID);
+// extern int wolftlsIOSend(void* ssl, char* buf, int sz, uintptr_t connID);
 // extern int wolftlsSNICallback(void* ssl, int connID);
 // extern int wolftlsCertSetupCallback(void* ssl, int connID);
 //
 // /* I/O callback trampolines: wolfSSL invokes these for every TLS
 //  * record read/write. They forward into Go via the //export functions. */
 // static int ioRecvTrampoline(WOLFSSL* ssl, char* buf, int sz, void* ctx) {
-//     return wolftlsIORecv((void*)ssl, buf, sz, ctx);
+//     return wolftlsIORecv((void*)ssl, buf, sz, (uintptr_t)ctx);
 // }
 // static int ioSendTrampoline(WOLFSSL* ssl, char* buf, int sz, void* ctx) {
-//     return wolftlsIOSend((void*)ssl, buf, sz, ctx);
+//     return wolftlsIOSend((void*)ssl, buf, sz, (uintptr_t)ctx);
 // }
 //
 // static inline int wolftls_update_keys(WOLFSSL* ssl) {
@@ -82,6 +82,11 @@ package wolftls
 // }
 // static inline void wolftls_set_io_send(WOLFSSL_CTX* ctx) {
 //     wolfSSL_CTX_SetIOSend(ctx, ioSendTrampoline);
+// }
+// /* The connID travels as an integer cookie; the cast stays on the C side. */
+// static inline void wolftls_set_io_ctx(WOLFSSL* ssl, uintptr_t connID) {
+//     wolfSSL_SetIOReadCtx(ssl, (void*)connID);
+//     wolfSSL_SetIOWriteCtx(ssl, (void*)connID);
 // }
 // #ifdef HAVE_SNI
 // static inline void wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
@@ -198,13 +203,13 @@ func closeQuietly(c net.Conn) {
 }
 
 //export wolftlsIORecv
-func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) (ret C.int) {
+func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, cID C.uintptr_t) (ret C.int) {
 	ret = C.int(cbioErrGeneral)
 	defer func() { recover() }()
 	if sz < 0 {
 		return C.int(cbioErrGeneral)
 	}
-	connID := int(uintptr(ctx))
+	connID := int(cID)
 	ic := getIOConn(connID)
 	if ic == nil {
 		return C.int(cbioErrGeneral)
@@ -244,13 +249,13 @@ func isTimeout(err error) bool {
 }
 
 //export wolftlsIOSend
-func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) (ret C.int) {
+func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, cID C.uintptr_t) (ret C.int) {
 	ret = C.int(cbioErrGeneral)
 	defer func() { recover() }()
 	if sz < 0 {
 		return C.int(cbioErrGeneral)
 	}
-	connID := int(uintptr(ctx))
+	connID := int(cID)
 	ic := getIOConn(connID)
 	if ic == nil {
 		return C.int(cbioErrGeneral)
@@ -305,9 +310,7 @@ func ctxSetIOCallbacks(ctx *wolfSSL.WOLFSSL_CTX) {
 // sslSetIOCtx wires the per-conn ioConn ID into a specific SSL session
 // so wolfSSL's read/write callbacks recover the right net.Conn.
 func sslSetIOCtx(ssl *wolfSSL.WOLFSSL, connID int) {
-	ptr := unsafe.Pointer(uintptr(connID))
-	C.wolfSSL_SetIOReadCtx((*C.WOLFSSL)(unsafe.Pointer(ssl)), ptr)
-	C.wolfSSL_SetIOWriteCtx((*C.WOLFSSL)(unsafe.Pointer(ssl)), ptr)
+	C.wolftls_set_io_ctx((*C.WOLFSSL)(unsafe.Pointer(ssl)), C.uintptr_t(connID))
 }
 
 // ------------------------------------------------------------------

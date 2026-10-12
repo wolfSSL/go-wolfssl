@@ -548,3 +548,37 @@ func TestSignDigestRequiresKeyRng(t *testing.T) {
 		t.Fatalf("SignDigest passed a key without an RNG to wolfCrypt: %v", err)
 	}
 }
+
+func TestMarshalPEMWipesDER(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	cases := []struct {
+		der func(*EccKey) ([]byte, error)
+		pem func(*EccKey) ([]byte, error)
+	}{
+		{MarshalSEC1DER, MarshalSEC1PEM},
+		{MarshalPKCS8DER, MarshalPKCS8PEM},
+	}
+	for _, c := range cases {
+		der, err := c.der(k)
+		if err != nil {
+			t.Fatalf("marshal DER: %v", err)
+		}
+		wiped := recordZeroBytes(t)
+		if _, err := c.pem(k); err != nil {
+			t.Fatalf("marshal PEM: %v", err)
+		}
+		found := false
+		for _, b := range wiped() {
+			if len(b) >= len(der) && allZero(b) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("temporary private-key DER was not wiped")
+		}
+	}
+}

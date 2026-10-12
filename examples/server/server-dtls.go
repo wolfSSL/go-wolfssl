@@ -107,10 +107,8 @@ func main() {
     /* Establish TLS connection */
     ret = wolfSSL.WolfSSL_accept(ssl);
     if ret != wolfSSL.WOLFSSL_SUCCESS {
-        fmt.Println(" WolfSSL_accept error ", ret);
-        e:= wolfSSL.WolfSSL_get_error(ssl, 0) 
-       // who :=  wolfSSL.WolfSSL_ERR_reason_error_string(e)
-        fmt.Println(" WolfSSL_accept error ",e )
+        e := wolfSSL.WolfSSL_get_error(ssl, ret)
+        fmt.Println(" WolfSSL_accept error ", e, wolfSSL.WolfSSL_ERR_error_string(e, nil));
         os.Exit(1)
     } else {
         fmt.Println("Client Succesfully Connected!");

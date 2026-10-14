@@ -1,0 +1,54 @@
+name: Multi-Compiler
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  compiler:
+    name: ${{ matrix.cc }} (wolfSSL ${{ needs.discover.outputs.latest_stable }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Compilers preinstalled on the ubuntu-24.04 runner image.
+        cc: [ gcc-12, gcc-13, gcc-14, clang-16, clang-17, clang-18 ]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: wolfSSL configure flags
+        id: flags
+        run: echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ needs.discover.outputs.latest_stable }}
+          configure-flags: ${{ steps.flags.outputs.flags }}
+          cc: ${{ matrix.cc }}
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+
+      - name: Build and test with warnings as errors
+        env:
+          CC: ${{ matrix.cc }}
+          CGO_CFLAGS: -O2 -g -Wall -Werror
+        run: .github/scripts/run-config.sh test all /tmp/wolfssl-install

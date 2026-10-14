@@ -121,6 +121,9 @@ jobs:
       - name: Run wolftls tests (full config)
         run: go test ./wolftls
 
+      - name: Run sha256 tests (full config)
+        run: go test ./sha256
+
       - name: Run wolfx509 tests (full config)
         run: go test ./wolfx509
 

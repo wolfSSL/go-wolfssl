@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -971,6 +972,63 @@ func TestCloseUnblocksReadWithoutDeadlines(t *testing.T) {
 		}
 	case <-time.After(lifecycleTimeout):
 		t.Fatal("Read did not return after Close")
+	}
+}
+
+func TestIdleCloseWithoutDeadlinesSendsCloseNotify(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return deadlineFreeConn{c} })
+	defer cleanup()
+	if err := cli.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := srv.Read(make([]byte, 16)); err != io.EOF {
+		t.Fatalf("peer Read after Close: got %v, want io.EOF from close_notify", err)
+	}
+}
+
+// stuckWriteConn is a deadline-free transport whose Write, once armed, blocks until Close.
+type stuckWriteConn struct {
+	deadlineFreeConn
+	armed     int32
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (s *stuckWriteConn) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&s.armed) == 1 {
+		<-s.closed
+		return 0, net.ErrClosed
+	}
+	return s.deadlineFreeConn.Write(b)
+}
+
+var errStuckClosed = errors.New("stuck transport closed")
+
+func (s *stuckWriteConn) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
+	s.deadlineFreeConn.Close()
+	return errStuckClosed
+}
+
+func TestIdleCloseWithoutDeadlinesBoundsStuckShutdown(t *testing.T) {
+	var sc *stuckWriteConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		sc = &stuckWriteConn{deadlineFreeConn: deadlineFreeConn{c}, closed: make(chan struct{})}
+		return sc
+	})
+	defer cleanup()
+	atomic.StoreInt32(&sc.armed, 1)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- cli.Close() }()
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, errStuckClosed) {
+			t.Fatalf("Close: got %v, want the transport's Close error", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		sc.Close()
+		t.Fatal("Close blocked on a close_notify write the transport could not time out")
 	}
 }
 

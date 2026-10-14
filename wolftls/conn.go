@@ -237,7 +237,7 @@ type Conn struct {
 	sslWrite *wolfSSL.WOLFSSL // == ssl when HAVE_WRITE_DUP unavailable
 
 	// callback registration IDs (0 = none)
-	ioConnID      int
+	ioConnID int
 	certCbID int
 
 	// populated after handshake; publishedState is the copy ConnectionState
@@ -924,13 +924,13 @@ func (c *Conn) Close() error {
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
-	var earlyCloseErr error
-	closedEarly := false
+	var closeTimer *time.Timer
+	timedOut := make(chan error, 1)
 	if conn != nil {
 		if err := conn.SetDeadline(time.Unix(1, 0)); err != nil {
-			// Without deadline support only closing the transport interrupts blocked I/O.
-			earlyCloseErr = conn.Close()
-			closedEarly = true
+			// Without deadline support only closing the transport interrupts blocked I/O or a
+			// stalled close_notify, so close it if Close has not finished by then.
+			closeTimer = time.AfterFunc(shutdownTimeout, func() { timedOut <- conn.Close() })
 		}
 	}
 	// Block until any concurrent doHandshake finishes — otherwise
@@ -947,9 +947,12 @@ func (c *Conn) Close() error {
 	defer c.mu.Unlock()
 	c.freeSSLLocked()
 	runtime.SetFinalizer(c, nil)
+	closedByTimer := closeTimer != nil && !closeTimer.Stop()
 	if c.conn != nil {
-		err := earlyCloseErr
-		if !closedEarly {
+		var err error
+		if closedByTimer {
+			err = <-timedOut
+		} else {
 			err = c.conn.Close()
 		}
 		c.conn = nil
@@ -1029,13 +1032,16 @@ func (c *Conn) freeSSL() {
 	c.freeSSLLocked()
 }
 
+// shutdownTimeout bounds the close_notify write when a Conn is closed.
+const shutdownTimeout = 100 * time.Millisecond
+
 // freeSSLLocked is the body of freeSSL. c.mu must be held for writing.
 func (c *Conn) freeSSLLocked() {
 	if c.ssl != nil {
 		// Set a short deadline so shutdown doesn't block forever
 		// (e.g. if the peer has already closed or we're on net.Pipe).
 		if c.conn != nil {
-			c.conn.SetDeadline(time.Now().Add(100 * time.Millisecond))
+			c.conn.SetDeadline(time.Now().Add(shutdownTimeout))
 		}
 		shutdownSSL := c.ssl
 		if c.sslWrite != nil {

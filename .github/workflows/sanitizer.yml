@@ -1,0 +1,91 @@
+name: Sanitizers
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Run every sanitizer against every wolfSSL ref
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  sanitize:
+    name: ${{ matrix.sanitizer }} (wolfSSL ${{ matrix.wolfssl-ref }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # MSan needs every C dependency instrumented and is still being triaged.
+    continue-on-error: ${{ matrix.sanitizer == 'msan' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ${{ fromJson(inputs.nightly && '["asan","ubsan","msan"]' || '["asan","ubsan"]') }}
+        wolfssl-ref: ${{ fromJson(inputs.nightly && needs.discover.outputs.refs || format('["{0}"]', needs.discover.outputs.latest_stable)) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Sanitizer flags
+        id: san
+        env:
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          set -euo pipefail
+          echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+          case "$SANITIZER" in
+          asan)
+            echo "cflags=-fsanitize=address -fno-omit-frame-pointer -g -O1" >> "$GITHUB_OUTPUT"
+            echo "ldflags=-fsanitize=address" >> "$GITHUB_OUTPUT"
+            echo "gotest=-asan" >> "$GITHUB_OUTPUT"
+            echo "ASAN_OPTIONS=detect_leaks=0" >> "$GITHUB_ENV" ;;
+          ubsan)
+            # The function check trips on wolfSSL's own stack free callbacks.
+            u="-fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=all"
+            echo "cflags=$u -g -O1" >> "$GITHUB_OUTPUT"
+            echo "ldflags=-fsanitize=undefined" >> "$GITHUB_OUTPUT"
+            # Go's race runtime cannot link next to the UBSan runtime.
+            echo "gotest=-gcflags=all=-d=checkptr" >> "$GITHUB_OUTPUT"
+            echo "CGO_CFLAGS=$u" >> "$GITHUB_ENV"
+            echo "CGO_LDFLAGS=-fsanitize=undefined" >> "$GITHUB_ENV"
+            echo "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1" >> "$GITHUB_ENV" ;;
+          msan)
+            echo "cflags=-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" >> "$GITHUB_OUTPUT"
+            echo "ldflags=-fsanitize=memory" >> "$GITHUB_OUTPUT"
+            echo "gotest=-msan" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Work around high-entropy ASLR for sanitizers
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ matrix.wolfssl-ref }}
+          configure-flags: ${{ steps.san.outputs.flags }}
+          cflags: ${{ steps.san.outputs.cflags }}
+          ldflags: ${{ steps.san.outputs.ldflags }}
+          cc: clang
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+
+      - name: Test go-wolfssl
+        env:
+          CC: clang
+          GO_TEST_FLAGS: ${{ steps.san.outputs.gotest }}
+        run: .github/scripts/run-config.sh test all /tmp/wolfssl-install

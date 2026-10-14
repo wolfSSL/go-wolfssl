@@ -1,4 +1,5 @@
 name: Static Analysis
+run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
 
 # START OF COMMON SECTION
 on:
@@ -7,9 +8,14 @@ on:
   pull_request:
     branches: [ '**' ]
   workflow_dispatch:
+    inputs:
+      nightly_id:
+        description: Set by the nightly dispatcher to identify its runs
+        type: string
+        default: ''
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
   cancel-in-progress: true
 # END OF COMMON SECTION
 
@@ -21,6 +27,7 @@ env:
   ANALYSIS_GO: '1.26'
   STATICCHECK_VERSION: v0.8.1
   GOVULNCHECK_VERSION: v1.8.0
+  ACTIONLINT_VERSION: v1.7.12
 
 jobs:
   gofmt:
@@ -55,6 +62,33 @@ jobs:
             gofmt -d "${files[@]}"
             exit 1
           fi
+
+  workflows:
+    name: actionlint and nightly script syntax
+    if: github.repository_owner == 'wolfssl'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: actionlint
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
+          # SC2046 is pre-existing in the older build, lint and test-tls workflows.
+          "$(go env GOPATH)/bin/actionlint" -ignore SC2046
+
+      - name: Check the nightly github-script parses
+        run: |
+          set -euo pipefail
+          { echo '(async () => {'
+            yq '.jobs.nightly.steps[0].with.script' .github/workflows/nightly.yml
+            echo '})();'; } > "$RUNNER_TEMP/nightly.js"
+          node --check "$RUNNER_TEMP/nightly.js"
 
   discover:
     if: github.repository_owner == 'wolfssl'

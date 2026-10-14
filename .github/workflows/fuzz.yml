@@ -1,17 +1,22 @@
 name: Fuzz
+run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
 
 # Seed corpora run with every go test in the config matrix; this workflow
 # does the long coverage-guided runs, dispatched nightly.
 on:
   workflow_dispatch:
     inputs:
+      nightly_id:
+        description: Set by the nightly dispatcher to identify its runs
+        type: string
+        default: ''
       fuzztime:
         description: How long to fuzz each target (Go duration)
         type: string
         default: 10m
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
   cancel-in-progress: true
 
 permissions:

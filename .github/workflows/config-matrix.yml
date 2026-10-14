@@ -1,4 +1,5 @@
 name: wolfSSL Config Matrix
+run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
 
 # START OF COMMON SECTION
 on:
@@ -7,9 +8,14 @@ on:
   pull_request:
     branches: [ '**' ]
   workflow_dispatch:
+    inputs:
+      nightly_id:
+        description: Set by the nightly dispatcher to identify its runs
+        type: string
+        default: ''
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
   cancel-in-progress: true
 # END OF COMMON SECTION
 

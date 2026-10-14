@@ -1,0 +1,92 @@
+name: Static Analysis
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+env:
+  # staticcheck v0.8.1 reads export data only up to Go 1.26; bump both together.
+  ANALYSIS_GO: '1.26'
+  STATICCHECK_VERSION: v0.8.1
+  GOVULNCHECK_VERSION: v1.8.0
+
+jobs:
+  gofmt:
+    name: gofmt (changed files)
+    if: github.repository_owner == 'wolfssl' && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Check formatting of changed Go files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.go')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Go files changed."
+            exit 0
+          fi
+          bad=$(gofmt -l "${files[@]}")
+          if [ -n "$bad" ]; then
+            echo "::error::These changed files need gofmt:"
+            echo "$bad"
+            gofmt -d "${files[@]}"
+            exit 1
+          fi
+
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  analyze:
+    name: vet, staticcheck, govulncheck (wolfSSL ${{ needs.discover.outputs.latest_stable }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: wolfSSL configure flags
+        id: flags
+        run: echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ needs.discover.outputs.latest_stable }}
+          configure-flags: ${{ steps.flags.outputs.flags }}
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+        with:
+          go-version: ${{ env.ANALYSIS_GO }}
+
+      - name: Install analyzers
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION"
+          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Analyze
+        run: .github/scripts/analyze.sh /tmp/wolfssl-install

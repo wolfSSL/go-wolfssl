@@ -1,0 +1,37 @@
+name: Resolve wolfSSL versions
+
+on:
+  workflow_call:
+    outputs:
+      refs:
+        description: 'JSON array of wolfSSL refs ([latest -stable, master]) for use as a matrix axis'
+        value: ${{ jobs.resolve.outputs.refs }}
+      latest_stable:
+        description: 'Latest wolfSSL v*-stable tag resolved at run time'
+        value: ${{ jobs.resolve.outputs.latest_stable }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve wolfSSL versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      refs: ${{ steps.resolve.outputs.refs }}
+      latest_stable: ${{ steps.resolve.outputs.latest_stable }}
+    steps:
+      - name: Resolve latest -stable wolfSSL tag
+        id: resolve
+        run: |
+          set -euo pipefail
+          LATEST=$(git ls-remote --tags --refs https://github.com/wolfSSL/wolfssl.git 'v*-stable' \
+                     | awk -F/ '{print $NF}' | sort -V | tail -n 1)
+          if [ -z "${LATEST:-}" ]; then
+            echo "::error::Could not resolve the latest wolfSSL -stable tag"
+            exit 1
+          fi
+          echo "Latest stable wolfSSL: $LATEST"
+          echo "latest_stable=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "refs=$(jq -nc --arg latest "$LATEST" '[$latest, "master"]')" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,28 @@
+name: Setup Go for go-wolfssl
+description: >-
+  Install Go, keep it from switching toolchains, and fetch the one module
+  dependency (golang.org/x/term, used by the aes-encrypt example) at a version
+  that still supports the oldest Go in CI.
+
+inputs:
+  go-version:
+    description: Go version or setup-go alias (stable, oldstable).
+    required: false
+    default: stable
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Configure the Go environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+        GOTOOLCHAIN=local go get golang.org/x/term@v0.25.0
+        go version

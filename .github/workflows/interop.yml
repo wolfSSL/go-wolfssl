@@ -1,0 +1,49 @@
+name: OpenSSL Interop
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  openssl:
+    name: Examples vs OpenSSL (wolfSSL ${{ matrix.wolfssl-ref }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        wolfssl-ref: ${{ fromJson(needs.discover.outputs.refs) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: wolfSSL configure flags
+        id: flags
+        run: echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ matrix.wolfssl-ref }}
+          configure-flags: ${{ steps.flags.outputs.flags }}
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+
+      - name: Example client and server against OpenSSL
+        run: .github/scripts/openssl-interop.sh /tmp/wolfssl-install

@@ -18,6 +18,7 @@ whose entire handshake and record I/O runs through wolfSSL.
 
 ## Build requirements
 
-Running `Read` and `Write` concurrently on a single `Conn` requires wolfSSL
-built with `--enable-writedup`; otherwise the two calls will serialize on a
-shared mutex.
+Concurrent `Read` and `Write` on a single `Conn` are supported in any build.
+With wolfSSL built with `--enable-writedup` they process records in parallel;
+otherwise they take turns inside wolfSSL, but a `Read` waiting for input never
+blocks a `Write`.

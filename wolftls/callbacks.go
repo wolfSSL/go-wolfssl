@@ -28,18 +28,27 @@ package wolftls
 // #include <string.h>
 //
 // /* Forward declarations — implemented in Go via //export. */
-// extern int wolftlsIORecv(void* ssl, char* buf, int sz, void* ctx);
-// extern int wolftlsIOSend(void* ssl, char* buf, int sz, void* ctx);
+// extern int wolftlsIORecv(void* ssl, char* buf, int sz, uintptr_t connID);
+// extern int wolftlsIOSend(void* ssl, char* buf, int sz, uintptr_t connID);
 // extern int wolftlsSNICallback(void* ssl, int connID);
 // extern int wolftlsCertSetupCallback(void* ssl, int connID);
 //
 // /* I/O callback trampolines: wolfSSL invokes these for every TLS
 //  * record read/write. They forward into Go via the //export functions. */
 // static int ioRecvTrampoline(WOLFSSL* ssl, char* buf, int sz, void* ctx) {
-//     return wolftlsIORecv((void*)ssl, buf, sz, ctx);
+//     return wolftlsIORecv((void*)ssl, buf, sz, (uintptr_t)ctx);
 // }
 // static int ioSendTrampoline(WOLFSSL* ssl, char* buf, int sz, void* ctx) {
-//     return wolftlsIOSend((void*)ssl, buf, sz, ctx);
+//     return wolftlsIOSend((void*)ssl, buf, sz, (uintptr_t)ctx);
+// }
+//
+// static inline int wolftls_update_keys(WOLFSSL* ssl) {
+// #ifdef WOLFSSL_TLS13
+//     return wolfSSL_update_keys(ssl);
+// #else
+//     (void)ssl;
+//     return NOT_COMPILED_IN;
+// #endif
 // }
 //
 // /* SNI callback trampoline. exArg carries the Go connID; the Go
@@ -73,6 +82,11 @@ package wolftls
 // }
 // static inline void wolftls_set_io_send(WOLFSSL_CTX* ctx) {
 //     wolfSSL_CTX_SetIOSend(ctx, ioSendTrampoline);
+// }
+// /* The connID travels as an integer cookie; the cast stays on the C side. */
+// static inline void wolftls_set_io_ctx(WOLFSSL* ssl, uintptr_t connID) {
+//     wolfSSL_SetIOReadCtx(ssl, (void*)connID);
+//     wolfSSL_SetIOWriteCtx(ssl, (void*)connID);
 // }
 // #ifdef HAVE_SNI
 // static inline int wolftls_set_sni_cb(WOLFSSL_CTX* ctx, int connID) {
@@ -124,6 +138,12 @@ const (
 	cbioErrTimeout   = -6
 )
 
+const (
+	sslErrorWantRead   = int(C.WOLFSSL_ERROR_WANT_READ)
+	sslErrorWantWrite  = int(C.WOLFSSL_ERROR_WANT_WRITE)
+	sslErrorZeroReturn = int(C.WOLFSSL_ERROR_ZERO_RETURN)
+)
+
 // ------------------------------------------------------------------
 // I/O callback registry: route wolfSSL record I/O through a Go net.Conn
 // ------------------------------------------------------------------
@@ -159,27 +179,68 @@ func getIOConn(id int) *ioConn {
 	return ioConns[id]
 }
 
+// A Go panic must not unwind through wolfSSL's C frames, so each exported
+// callback converts one into the callback's error return.
+
+// transportPanicError replaces a panic from the caller's net.Conn.
+type transportPanicError struct{}
+
+func (transportPanicError) Error() string { return "wolftls: transport panicked" }
+
+// guardTransport runs one transport Read or Write. If it panics, the
+// transport is closed, since it may have moved bytes wolfSSL never saw.
+func guardTransport(c net.Conn, op func() (int, error)) (n int, err error) {
+	panicked := true
+	defer func() {
+		if panicked {
+			recover()
+			closeQuietly(c)
+			n, err = 0, transportPanicError{}
+		}
+	}()
+	n, err = op()
+	panicked = false
+	return n, err
+}
+
+func closeQuietly(c net.Conn) {
+	defer func() { recover() }()
+	c.Close()
+}
+
 //export wolftlsIORecv
-func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) C.int {
-	connID := int(uintptr(ctx))
+func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, cID C.uintptr_t) (ret C.int) {
+	ret = C.int(cbioErrGeneral)
+	defer func() { recover() }()
+	if sz < 0 {
+		return C.int(cbioErrGeneral)
+	}
+	connID := int(cID)
 	ic := getIOConn(connID)
 	if ic == nil {
 		return C.int(cbioErrGeneral)
 	}
 
 	goBuf := make([]byte, int(sz))
-	n, err := ic.conn.Read(goBuf)
+	n, buffered := 0, false
+	if rc, ok := ic.conn.(*recordingConn); ok {
+		n, buffered = rc.takeBuffered(goBuf)
+	}
+	var err error
+	if !buffered {
+		n, err = guardTransport(ic.conn, func() (int, error) { return ic.conn.Read(goBuf) })
+	}
 	if n > 0 {
 		C.memcpy(unsafe.Pointer(buf), unsafe.Pointer(&goBuf[0]), C.size_t(n))
 		return C.int(n)
 	}
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return C.int(cbioErrConnClose)
 		}
 		// Hitting the user set deadline for the read has no implication
 		// for the underlying TCP connection. Loop with WANT_READ.
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		if isTimeout(err) {
 			return C.int(cbioErrWantRead)
 		}
 		return C.int(cbioErrGeneral)
@@ -187,23 +248,62 @@ func wolftlsIORecv(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Poin
 	return C.int(cbioErrWantRead)
 }
 
+// isTimeout reports whether err, or any error it wraps, is a net.Error timeout.
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 //export wolftlsIOSend
-func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, ctx unsafe.Pointer) C.int {
-	connID := int(uintptr(ctx))
+func wolftlsIOSend(sslPtr unsafe.Pointer, buf *C.char, sz C.int, cID C.uintptr_t) (ret C.int) {
+	ret = C.int(cbioErrGeneral)
+	defer func() { recover() }()
+	if sz < 0 {
+		return C.int(cbioErrGeneral)
+	}
+	connID := int(cID)
 	ic := getIOConn(connID)
 	if ic == nil {
 		return C.int(cbioErrGeneral)
 	}
 
+	// Nothing more may reach the peer once a record was left half-sent.
+	if rc, ok := ic.conn.(*recordingConn); ok && rc.writeClosed() {
+		return C.int(cbioErrWantWrite)
+	}
 	goBuf := C.GoBytes(unsafe.Pointer(buf), sz)
-	n, err := ic.conn.Write(goBuf)
+	n, err := guardTransport(ic.conn, func() (int, error) { return ic.conn.Write(goBuf) })
 	if n > 0 {
 		return C.int(n)
 	}
 	if err != nil {
+		if isTimeout(err) {
+			// Close writes while wolfSSL still holds the session, so no other
+			// caller can flush the half-sent record.
+			if rc, ok := ic.conn.(*recordingConn); ok {
+				rc.closeWrites(err)
+			}
+			return C.int(cbioErrWantWrite)
+		}
 		return C.int(cbioErrConnClose)
 	}
 	return C.int(cbioErrWantWrite)
+}
+
+// sslMaxPlaintext returns the most plaintext one record carries on a
+// handshaken ssl.
+func sslMaxPlaintext(ssl *wolfSSL.WOLFSSL) int {
+	n := int(C.wolfSSL_GetMaxOutputSize((*C.WOLFSSL)(unsafe.Pointer(ssl))))
+	if n <= 0 || n > 16384 {
+		return 16384
+	}
+	return n
+}
+
+// sslRequestKeyUpdate sends a TLS 1.3 KeyUpdate that asks the peer to
+// respond; it returns WOLFSSL_SUCCESS or a negative error.
+func sslRequestKeyUpdate(ssl *wolfSSL.WOLFSSL) int {
+	return int(C.wolftls_update_keys((*C.WOLFSSL)(unsafe.Pointer(ssl))))
 }
 
 // ctxSetIOCallbacks installs the I/O trampolines on a WOLFSSL_CTX.
@@ -216,9 +316,7 @@ func ctxSetIOCallbacks(ctx *wolfSSL.WOLFSSL_CTX) {
 // sslSetIOCtx wires the per-conn ioConn ID into a specific SSL session
 // so wolfSSL's read/write callbacks recover the right net.Conn.
 func sslSetIOCtx(ssl *wolfSSL.WOLFSSL, connID int) {
-	ptr := unsafe.Pointer(uintptr(connID))
-	C.wolfSSL_SetIOReadCtx((*C.WOLFSSL)(unsafe.Pointer(ssl)), ptr)
-	C.wolfSSL_SetIOWriteCtx((*C.WOLFSSL)(unsafe.Pointer(ssl)), ptr)
+	C.wolftls_set_io_ctx((*C.WOLFSSL)(unsafe.Pointer(ssl)), C.uintptr_t(connID))
 }
 
 // ------------------------------------------------------------------
@@ -253,7 +351,9 @@ func unregisterSNICallback(id int) {
 }
 
 //export wolftlsSNICallback
-func wolftlsSNICallback(sslPtr unsafe.Pointer, connID C.int) C.int {
+func wolftlsSNICallback(sslPtr unsafe.Pointer, connID C.int) (ret C.int) {
+	ret = 1
+	defer func() { recover() }()
 	ssl := (*wolfSSL.WOLFSSL)(sslPtr)
 	serverName := wolfSSL.WolfSSL_SNI_GetServerName(ssl)
 
@@ -318,7 +418,9 @@ func unregisterCertSetupCallback(id int) {
 }
 
 //export wolftlsCertSetupCallback
-func wolftlsCertSetupCallback(sslPtr unsafe.Pointer, connID C.int) C.int {
+func wolftlsCertSetupCallback(sslPtr unsafe.Pointer, connID C.int) (ret C.int) {
+	ret = 0
+	defer func() { recover() }()
 	ssl := (*wolfSSL.WOLFSSL)(sslPtr)
 	certCbMu.Lock()
 	cb, ok := certCbCallbacks[int(connID)]

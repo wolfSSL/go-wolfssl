@@ -33,6 +33,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	wolfSSL "github.com/wolfssl/go-wolfssl"
@@ -46,18 +47,136 @@ import (
 // the DERP reconnect loop fixed alongside this type.
 type recordingConn struct {
 	net.Conn
-	mu          sync.Mutex
-	lastReadErr error
+	mu           sync.Mutex
+	lastReadErr  error
+	lastWriteErr error
+	// buffered: Read and Write share one WOLFSSL, so Conn.Read waits on the
+	// transport outside the session lock and the recv callback serves pending.
+	buffered bool
+	pending  []byte
+	fills    uint64
+	// deferredErr came back from the transport together with data; it is
+	// reported by the next read, after wolfSSL has consumed that data.
+	deferredErr error
+	// writeDeadErr, once a send times out, stops every later transport write.
+	writeDeadErr error
+}
+
+func (r *recordingConn) closeWrites(err error) {
+	r.mu.Lock()
+	if r.writeDeadErr == nil {
+		r.writeDeadErr = err
+	}
+	r.mu.Unlock()
+}
+
+func (r *recordingConn) writeClosed() bool {
+	return r.deadWriteErr() != nil
+}
+
+func (r *recordingConn) deadWriteErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.writeDeadErr
 }
 
 func (r *recordingConn) Read(b []byte) (int, error) {
+	r.mu.Lock()
+	if err := r.deferredErr; err != nil {
+		r.deferredErr = nil
+		r.lastReadErr = err
+		r.mu.Unlock()
+		return 0, err
+	}
+	r.mu.Unlock()
 	n, err := r.Conn.Read(b)
 	if err != nil {
 		r.mu.Lock()
-		r.lastReadErr = err
+		if n > 0 {
+			r.deferredErr = err
+			err = nil
+		} else {
+			r.lastReadErr = err
+		}
 		r.mu.Unlock()
 	}
 	return n, err
+}
+
+func (r *recordingConn) Write(b []byte) (int, error) {
+	n, err := r.Conn.Write(b)
+	if err != nil {
+		r.mu.Lock()
+		r.lastWriteErr = err
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+func (r *recordingConn) takeLastWriteErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	err := r.lastWriteErr
+	r.lastWriteErr = nil
+	return err
+}
+
+func (r *recordingConn) setBuffered() {
+	r.mu.Lock()
+	r.buffered = true
+	r.mu.Unlock()
+}
+
+// takeBuffered copies queued transport bytes into b. ok is false when the
+// recv callback should read the transport directly instead.
+func (r *recordingConn) takeBuffered(b []byte) (n int, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.buffered {
+		return 0, false
+	}
+	n = copy(b, r.pending)
+	r.pending = r.pending[n:]
+	if len(r.pending) == 0 {
+		r.pending = nil
+	}
+	return n, true
+}
+
+// fill blocks on the transport and queues what arrives for the recv callback.
+func (r *recordingConn) fill(b []byte) error {
+	r.mu.Lock()
+	if err := r.deferredErr; err != nil {
+		r.deferredErr = nil
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Unlock()
+	for i := 0; i < maxEmptyTransportOps; i++ {
+		n, err := guardTransport(r.Conn, func() (int, error) { return r.Conn.Read(b) })
+		if n > 0 {
+			r.mu.Lock()
+			r.fills++
+			r.pending = append(r.pending, b[:n]...)
+			r.deferredErr = err
+			r.mu.Unlock()
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return io.ErrNoProgress
+}
+
+// maxEmptyTransportOps bounds retries of a transport that makes no progress,
+// matching bufio's limit before io.ErrNoProgress.
+const maxEmptyTransportOps = 100
+
+func (r *recordingConn) fillCount() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fills
 }
 
 func (r *recordingConn) takeLastReadErr() error {
@@ -67,6 +186,12 @@ func (r *recordingConn) takeLastReadErr() error {
 	r.lastReadErr = nil
 	return err
 }
+
+const (
+	hsPending  = 0
+	hsFinished = 1
+	hsAborted  = 2 // a canceled HandshakeContext closed the transport
+)
 
 // Conn is a TLS connection backed by wolfSSL. It implements net.Conn.
 type Conn struct {
@@ -78,6 +203,9 @@ type Conn struct {
 	handshakeMu   sync.Mutex
 	handshakeDone bool
 	handshakeErr  error
+	// handshakeState arbitrates between handshake completion and a
+	// HandshakeContext cancel that closes the transport; see hs* below.
+	handshakeState int32
 
 	// mu protects c.ssl and c.ctx for callers that may run concurrently
 	// with Close (e.g. http.Hijacker handing the conn to a DERP handler
@@ -86,10 +214,22 @@ type Conn struct {
 	// a past deadline on c.conn.
 	mu sync.RWMutex
 
-	// muRead/muWrite serialize wolfSSL_read/wolfSSL_write. Aliased to the
-	// same mutex when HAVE_WRITE_DUP unavailable.
+	// muRead/muWrite serialize Read and Write callers. sslMu is set only
+	// when HAVE_WRITE_DUP is unavailable and guards each call into the
+	// single shared WOLFSSL; it is never held while waiting on the network.
 	muRead  *sync.Mutex
 	muWrite *sync.Mutex
+	sslMu   *sync.Mutex
+	rbuf    []byte
+	// pumpMu lets Read and Write take turns waiting on the transport for
+	// the shared session; it guards rbuf.
+	pumpMu sync.Mutex
+	// brokenWrite is set when a record could not be finished before a write
+	// timeout; later writes fail with it, as in crypto/tls. Guarded by muWrite.
+	brokenWrite error
+	// writeChunk caps each WolfSSL_write at one record so a timeout can
+	// only strand the record in flight.
+	writeChunk int
 
 	// wolfSSL objects — created during handshake
 	ctx      *wolfSSL.WOLFSSL_CTX
@@ -97,11 +237,14 @@ type Conn struct {
 	sslWrite *wolfSSL.WOLFSSL // == ssl when HAVE_WRITE_DUP unavailable
 
 	// callback registration IDs (0 = none)
-	ioConnID      int
+	ioConnID int
 	certCbID int
 
-	// populated after handshake
-	connState ConnectionState
+	// populated after handshake; publishedState is the copy ConnectionState
+	// reads under stateMu
+	connState      ConnectionState
+	stateMu        sync.RWMutex
+	publishedState ConnectionState
 }
 
 func newConn(conn net.Conn, config *Config, isClient bool) *Conn {
@@ -117,7 +260,13 @@ func newConn(conn net.Conn, config *Config, isClient bool) *Conn {
 	return c
 }
 
-func (c *Conn) finalize() { c.freeSSL() }
+// finalize frees wolfSSL state without a TLS shutdown: finalizers run on a
+// single goroutine and must not block on, or write to, the transport.
+func (c *Conn) finalize() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseSSLLocked()
+}
 
 // Handshake performs the TLS handshake if it has not already been performed.
 // It is safe to call concurrently; only the first call performs the handshake.
@@ -131,6 +280,13 @@ func (c *Conn) Handshake() error {
 
 	c.handshakeErr = c.doHandshake()
 	c.handshakeDone = true
+	if !atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsFinished) && c.handshakeErr == nil {
+		c.cleanup()
+		c.handshakeErr = net.ErrClosed
+	}
+	if c.handshakeErr == nil {
+		c.publishConnectionState()
+	}
 	return c.handshakeErr
 }
 
@@ -138,6 +294,9 @@ func (c *Conn) Handshake() error {
 // If the context is canceled before the handshake completes, a past deadline
 // is set on the underlying connection to unblock the wolfSSL handshake call.
 func (c *Conn) HandshakeContext(ctx context.Context) error {
+	if atomic.LoadInt32(&c.handshakeState) != hsPending {
+		return c.Handshake()
+	}
 	done := make(chan struct{})
 	var err error
 	go func() {
@@ -149,18 +308,51 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 	case <-done:
 		return err
 	case <-ctx.Done():
+		select {
+		case <-done:
+			return err
+		default:
+		}
+		c.mu.RLock()
+		conn := c.conn
+		c.mu.RUnlock()
 		// Set an expired deadline to unblock the blocking wolfSSL call
 		// without closing the conn out from under the handshake goroutine.
-		c.conn.SetDeadline(time.Unix(1, 0))
+		// A transport without deadline support has to be closed instead.
+		if conn != nil {
+			if conn.SetDeadline(time.Unix(1, 0)) != nil &&
+				atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsAborted) {
+				conn.Close()
+			}
+		}
 		<-done // wait for Handshake goroutine to finish
 		// Restore deadline so the caller can still close cleanly.
-		c.conn.SetDeadline(time.Time{})
-		if err == nil {
-			err = ctx.Err()
+		if conn != nil {
+			conn.SetDeadline(time.Time{})
 		}
-		return err
+		if err != nil {
+			return &canceledHandshakeError{ctxErr: ctx.Err(), err: err}
+		}
+		return ctx.Err()
 	}
 }
+
+// canceledHandshakeError reports a canceled HandshakeContext while keeping
+// both the context error and the handshake error visible to errors.Is/As.
+type canceledHandshakeError struct {
+	ctxErr error
+	err    error
+}
+
+func (e *canceledHandshakeError) Error() string {
+	return e.ctxErr.Error() + ": " + e.err.Error()
+}
+
+func (e *canceledHandshakeError) Is(target error) bool { return target == e.ctxErr }
+
+func (e *canceledHandshakeError) As(target interface{}) bool { return errors.As(e.ctxErr, target) }
+
+func (e *canceledHandshakeError) Unwrap() error { return e.err }
 
 // doHandshake performs the actual handshake. Must be called with handshakeMu held.
 func (c *Conn) doHandshake() error {
@@ -439,16 +631,18 @@ func (c *Conn) doHandshake() error {
 	}
 
 	// Split off a write-only WOLFSSL when HAVE_WRITE_DUP is built in;
-	// otherwise fall back to a single mutex serializing Read and Write.
+	// otherwise share one session under sslMu and buffer transport input.
+	c.muRead = &sync.Mutex{}
+	c.muWrite = &sync.Mutex{}
+	c.writeChunk = sslMaxPlaintext(c.ssl)
 	if dup := wolfSSL.WolfSSL_write_dup(c.ssl); dup != nil {
 		c.sslWrite = dup
-		c.muRead = &sync.Mutex{}
-		c.muWrite = &sync.Mutex{}
 	} else {
 		c.sslWrite = c.ssl
-		shared := &sync.Mutex{}
-		c.muRead = shared
-		c.muWrite = shared
+		c.sslMu = &sync.Mutex{}
+		if rc, ok := c.conn.(*recordingConn); ok {
+			rc.setBuffered()
+		}
 	}
 
 	return nil
@@ -504,7 +698,16 @@ func (c *Conn) extractPeerCerts() {
 // ConnectionState returns the state of the TLS connection. If the handshake
 // has not yet completed, it returns a zero-value ConnectionState.
 func (c *Conn) ConnectionState() ConnectionState {
-	return c.connState
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.publishedState
+}
+
+// publishConnectionState makes connState visible to ConnectionState.
+func (c *Conn) publishConnectionState() {
+	c.stateMu.Lock()
+	c.publishedState = c.connState
+	c.stateMu.Unlock()
 }
 
 // Read reads data from the TLS connection. If the handshake has not yet
@@ -523,21 +726,88 @@ func (c *Conn) Read(b []byte) (int, error) {
 	}
 	c.muRead.Lock()
 	defer c.muRead.Unlock()
-	n := wolfSSL.WolfSSL_read(c.ssl, b, uintptr(len(b)))
+	rc, _ := c.conn.(*recordingConn)
+	if rc != nil {
+		rc.takeLastReadErr()
+	}
+	var gen uint64
+	if rc != nil {
+		gen = rc.fillCount()
+	}
+	n, errCode := c.readRecord(b)
+	for n <= 0 && c.sslMu != nil && rc != nil && errCode == sslErrorWantRead {
+		if err := c.pumpInput(rc, gen); err != nil {
+			return 0, unexpectedEOF(err)
+		}
+		gen = rc.fillCount()
+		n, errCode = c.readRecord(b)
+	}
 	if n > 0 {
 		return n, nil
 	}
-	if rc, ok := c.conn.(*recordingConn); ok {
+	// Only an authenticated close_notify ends the stream cleanly.
+	if errCode == sslErrorZeroReturn {
+		return 0, io.EOF
+	}
+	if rc != nil {
 		if e := rc.takeLastReadErr(); e != nil {
-			return 0, e
+			return 0, unexpectedEOF(e)
 		}
 	}
 	if n == 0 {
-		return 0, io.EOF
+		return 0, io.ErrUnexpectedEOF
 	}
-	errCode := wolfSSL.WolfSSL_get_error(c.ssl, n)
 	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 	return 0, fmt.Errorf("wolftls: read error: %s (%d)", errMsg, errCode)
+}
+
+// unexpectedEOF maps a transport EOF seen before close_notify to
+// io.ErrUnexpectedEOF so a truncated stream is not mistaken for a clean end.
+func unexpectedEOF(err error) error {
+	if errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
+// pumpInput waits for more transport input for the shared session, unless
+// input already arrived after gen was sampled.
+func (c *Conn) pumpInput(rc *recordingConn, gen uint64) error {
+	c.pumpMu.Lock()
+	defer c.pumpMu.Unlock()
+	if rc.fillCount() != gen {
+		return nil
+	}
+	if c.rbuf == nil {
+		c.rbuf = make([]byte, 16384)
+	}
+	return rc.fill(c.rbuf)
+}
+
+// readRecord runs one WolfSSL_read and returns its result and error code.
+func (c *Conn) readRecord(b []byte) (int, int) {
+	if c.sslMu != nil {
+		c.sslMu.Lock()
+		defer c.sslMu.Unlock()
+	}
+	n := wolfSSL.WolfSSL_read(c.ssl, b, uintptr(len(b)))
+	if n > 0 {
+		return n, 0
+	}
+	return n, wolfSSL.WolfSSL_get_error(c.ssl, n)
+}
+
+// writeRecord runs one WolfSSL_write and returns its result and error code.
+func (c *Conn) writeRecord(b []byte) (int, int) {
+	if c.sslMu != nil {
+		c.sslMu.Lock()
+		defer c.sslMu.Unlock()
+	}
+	n := wolfSSL.WolfSSL_write(c.sslWrite, b, uintptr(len(b)))
+	if n > 0 {
+		return n, 0
+	}
+	return n, wolfSSL.WolfSSL_get_error(c.sslWrite, n)
 }
 
 // Write writes data to the TLS connection. If the handshake has not yet
@@ -556,17 +826,93 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 	c.muWrite.Lock()
 	defer c.muWrite.Unlock()
+	rc, _ := c.conn.(*recordingConn)
+	if rc != nil {
+		rc.takeLastWriteErr()
+	}
+	if c.brokenWrite == nil && rc != nil {
+		c.brokenWrite = rc.deadWriteErr()
+	}
+	if c.brokenWrite != nil {
+		return 0, c.brokenWrite
+	}
 	total := 0
+	stalls := 0
 	for total < len(b) {
-		n := wolfSSL.WolfSSL_write(c.sslWrite, b[total:], uintptr(len(b)-total))
-		if n <= 0 {
-			errCode := wolfSSL.WolfSSL_get_error(c.sslWrite, n)
-			errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
-			return total, fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
+		end := len(b)
+		if end-total > c.writeChunk {
+			end = total + c.writeChunk
 		}
-		total += n
+		var gen uint64
+		if rc != nil {
+			gen = rc.fillCount()
+		}
+		n, errCode := c.writeRecord(b[total:end])
+		if n > 0 {
+			total += n
+			stalls = 0
+			continue
+		}
+		// The shared session needs peer input before it can write; nothing of
+		// the chunk is sealed yet, so wait for input and retry the same chunk.
+		if errCode == sslErrorWantRead && c.sslMu != nil && rc != nil {
+			if err := c.pumpInput(rc, gen); err != nil {
+				return total, err
+			}
+			continue
+		}
+		var transportErr error
+		if rc != nil {
+			transportErr = rc.takeLastWriteErr()
+		}
+		dead, retry := classifyWriteFailure(errCode, transportErr)
+		if rc != nil && rc.writeClosed() {
+			dead, retry = true, false
+			if transportErr == nil {
+				transportErr = rc.deadWriteErr()
+			}
+		}
+		if retry {
+			if stalls++; stalls < maxEmptyTransportOps {
+				runtime.Gosched()
+				continue
+			}
+			// The record may be half sent, so a stuck transport ends writes.
+			dead, transportErr = true, io.ErrNoProgress
+		}
+		err := writeError(errCode, transportErr)
+		if dead {
+			c.brokenWrite = err
+			if rc != nil {
+				rc.closeWrites(err)
+			}
+		}
+		return total, err
 	}
 	return total, nil
+}
+
+// classifyWriteFailure: a transport timeout strands a half-sent record, so
+// writes go dead; a stall with no transport error retries the same chunk;
+// WANT_READ comes before any of the chunk is sealed, so later writes proceed.
+func classifyWriteFailure(errCode int, transportErr error) (dead, retrySame bool) {
+	if errCode != sslErrorWantWrite {
+		return false, false
+	}
+	if transportErr == nil {
+		return false, true
+	}
+	return isTimeout(transportErr), false
+}
+
+// writeError reports a failed WolfSSL_write, preferring the transport's own
+// error (such as a net.Error timeout) when wolfSSL only wants to write again.
+func writeError(errCode int, transportErr error) error {
+	if transportErr != nil && errCode == sslErrorWantWrite {
+		return transportErr
+	}
+	errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
+	return fmt.Errorf("wolftls: write error: %s (%d)", errMsg, errCode)
 }
 
 // Close shuts down the TLS connection and closes the underlying transport.
@@ -578,20 +924,40 @@ func (c *Conn) Close() error {
 	// release their RLock and this Close can proceed with Lock. The
 	// same kick aborts an in-flight wolfSSL_connect/accept inside
 	// doHandshake so we can safely take handshakeMu next.
-	if c.conn != nil {
-		c.conn.SetDeadline(time.Unix(1, 0))
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	var closeTimer *time.Timer
+	timedOut := make(chan error, 1)
+	if conn != nil {
+		if err := conn.SetDeadline(time.Unix(1, 0)); err != nil {
+			// Without deadline support only closing the transport interrupts blocked I/O or a
+			// stalled close_notify, so close it if Close has not finished by then.
+			closeTimer = time.AfterFunc(shutdownTimeout, func() { timedOut <- conn.Close() })
+		}
 	}
 	// Block until any concurrent doHandshake finishes — otherwise
 	// freeSSLLocked below would free c.ssl/c.ctx out from under it
 	// (use-after-free in wolfSSL_connect / WolfSSL_get_error).
 	c.handshakeMu.Lock()
 	defer c.handshakeMu.Unlock()
+	if !c.handshakeDone {
+		c.handshakeDone = true
+		c.handshakeErr = net.ErrClosed
+		atomic.CompareAndSwapInt32(&c.handshakeState, hsPending, hsFinished)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.freeSSLLocked()
 	runtime.SetFinalizer(c, nil)
+	closedByTimer := closeTimer != nil && !closeTimer.Stop()
 	if c.conn != nil {
-		err := c.conn.Close()
+		var err error
+		if closedByTimer {
+			err = <-timedOut
+		} else {
+			err = c.conn.Close()
+		}
 		c.conn = nil
 		return err
 	}
@@ -619,7 +985,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 }
 
 // SetDeadline sets the read and write deadlines on the underlying connection.
-// wolfSSL will observe these via the file descriptor's socket timeout.
+// Expiry is observed when TLS record I/O calls that connection's Read or Write.
 func (c *Conn) SetDeadline(t time.Time) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -669,22 +1035,36 @@ func (c *Conn) freeSSL() {
 	c.freeSSLLocked()
 }
 
+// shutdownTimeout bounds the close_notify write when a Conn is closed.
+const shutdownTimeout = 100 * time.Millisecond
+
 // freeSSLLocked is the body of freeSSL. c.mu must be held for writing.
 func (c *Conn) freeSSLLocked() {
 	if c.ssl != nil {
 		// Set a short deadline so shutdown doesn't block forever
 		// (e.g. if the peer has already closed or we're on net.Pipe).
 		if c.conn != nil {
-			c.conn.SetDeadline(time.Now().Add(100 * time.Millisecond))
+			c.conn.SetDeadline(time.Now().Add(shutdownTimeout))
 		}
 		shutdownSSL := c.ssl
 		if c.sslWrite != nil {
 			shutdownSSL = c.sslWrite
 		}
-		wolfSSL.WolfSSL_shutdown(shutdownSSL)
+		// close_notify would also flush a record that Write reported as unsent.
+		if c.brokenWrite == nil {
+			wolfSSL.WolfSSL_shutdown(shutdownSSL)
+		}
 		if c.conn != nil {
 			c.conn.SetDeadline(time.Time{}) // clear deadline
 		}
+	}
+	c.releaseSSLLocked()
+}
+
+// releaseSSLLocked frees the wolfSSL session, CTX, and I/O registration
+// without any transport I/O. c.mu must be held for writing.
+func (c *Conn) releaseSSLLocked() {
+	if c.ssl != nil {
 		if c.sslWrite != nil && c.sslWrite != c.ssl {
 			wolfSSL.WolfSSL_free(c.sslWrite)
 		}

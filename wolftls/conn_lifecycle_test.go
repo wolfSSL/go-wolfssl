@@ -1,0 +1,1368 @@
+/* conn_lifecycle_test.go
+ *
+ * Copyright (C) 2006-2026 wolfSSL Inc.
+ *
+ * This file is part of wolfSSL.
+ *
+ * wolfSSL is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfSSL is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package wolftls
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+const lifecycleTimeout = 5 * time.Second
+
+// notifyConn reports each transport Read made while armed.
+type notifyConn struct {
+	net.Conn
+	armed   int32
+	entered chan struct{}
+}
+
+func newNotifyConn(c net.Conn) *notifyConn {
+	return &notifyConn{Conn: c, entered: make(chan struct{}, 1)}
+}
+
+func (n *notifyConn) Read(b []byte) (int, error) {
+	if atomic.LoadInt32(&n.armed) == 1 {
+		select {
+		case n.entered <- struct{}{}:
+		default:
+		}
+	}
+	return n.Conn.Read(b)
+}
+
+func TestWriteProceedsWhileReadWaits(t *testing.T) {
+	var nc *notifyConn
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		nc = newNotifyConn(c)
+		return nc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&nc.armed, 1)
+	reply := make([]byte, 4)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(cli, reply)
+		readDone <- err
+	}()
+	select {
+	case <-nc.entered:
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("client Read never reached the transport")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Write([]byte("ping"))
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("client write: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Write blocked behind a Read waiting for input")
+	}
+
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(srv, got); err != nil || string(got) != "ping" {
+		t.Fatalf("server read %q: %v", got, err)
+	}
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	select {
+	case err := <-readDone:
+		if err != nil || string(reply) != "pong" {
+			t.Fatalf("client read %q: %v", reply, err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("client Read did not complete")
+	}
+}
+
+// panickingTransport panics from Read or Write once the matching flag is set.
+type panickingTransport struct {
+	net.Conn
+	readPanics  int32
+	writePanics int32
+}
+
+func (p *panickingTransport) Read(b []byte) (int, error) {
+	switch atomic.LoadInt32(&p.readPanics) {
+	case 1:
+		panic("transport read failure")
+	case 2:
+		p.Conn.Read(b)
+		panic("transport read failure after partial input")
+	}
+	return p.Conn.Read(b)
+}
+
+func (p *panickingTransport) Write(b []byte) (int, error) {
+	switch atomic.LoadInt32(&p.writePanics) {
+	case 1:
+		panic("transport write failure")
+	case 2:
+		panic(nil)
+	case 3:
+		p.Conn.Write(b[:len(b)/2])
+		panic("transport write failure after partial output")
+	}
+	return p.Conn.Write(b)
+}
+
+// runWithoutPanic runs f and fails the test if a panic escapes it.
+func runWithoutPanic(t *testing.T, f func() error) error {
+	t.Helper()
+	var err error
+	var escaped interface{}
+	func() {
+		defer func() { escaped = recover() }()
+		err = f()
+	}()
+	if escaped != nil {
+		t.Fatalf("unexpected panic: %v", escaped)
+	}
+	return err
+}
+
+func TestCallbackPanicBecomesError(t *testing.T) {
+	t.Run("transport read", func(t *testing.T) {
+		cConn, sConn := net.Pipe()
+		defer sConn.Close()
+		go io.Copy(io.Discard, sConn)
+		pc := &panickingTransport{Conn: cConn, readPanics: 1}
+		cli := Client(pc, &Config{ServerName: "localhost", InsecureSkipVerify: true})
+		defer cli.Close()
+		if err := runWithoutPanic(t, cli.Handshake); err == nil {
+			t.Fatal("handshake succeeded over a panicking transport")
+		}
+	})
+
+	t.Run("transport write", func(t *testing.T) {
+		var pc *panickingTransport
+		cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+			pc = &panickingTransport{Conn: c}
+			return pc
+		})
+		defer cleanup()
+		atomic.StoreInt32(&pc.writePanics, 1)
+		defer atomic.StoreInt32(&pc.writePanics, 0)
+		err := runWithoutPanic(t, func() error {
+			_, err := cli.Write([]byte("data"))
+			return err
+		})
+		if err == nil {
+			t.Fatal("write succeeded over a panicking transport")
+		}
+	})
+
+	t.Run("transport write nil panic", func(t *testing.T) {
+		var pc *panickingTransport
+		cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+			pc = &panickingTransport{Conn: c}
+			return pc
+		})
+		defer cleanup()
+		atomic.StoreInt32(&pc.writePanics, 2)
+		defer atomic.StoreInt32(&pc.writePanics, 0)
+		done := make(chan error, 1)
+		go func() {
+			_, err := cli.Write([]byte("data"))
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("write succeeded over a panicking transport")
+			}
+		case <-time.After(lifecycleTimeout):
+			t.Fatal("Write did not fail after the transport panicked")
+		}
+	})
+
+	t.Run("transport write after partial output", func(t *testing.T) {
+		var pc *panickingTransport
+		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+			pc = &panickingTransport{Conn: c}
+			return pc
+		})
+		defer cleanup()
+		// Drain post-handshake messages so closing the transport is a clean FIN.
+		if _, err := srv.Write([]byte("x")); err != nil {
+			t.Fatalf("server write: %v", err)
+		}
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+			t.Fatalf("client read: %v", err)
+		}
+
+		msg := make([]byte, 100)
+		atomic.StoreInt32(&pc.writePanics, 3)
+		defer atomic.StoreInt32(&pc.writePanics, 0)
+		err := runWithoutPanic(t, func() error {
+			_, err := cli.Write(msg)
+			return err
+		})
+		if err == nil {
+			t.Fatal("write succeeded over a panicking transport")
+		}
+		atomic.StoreInt32(&pc.writePanics, 0)
+		if _, err := cli.Write(msg); err == nil {
+			t.Fatal("Write succeeded after the transport panicked mid-record")
+		}
+		srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		_, err = srv.Read(make([]byte, 16))
+		if err != io.EOF && err != io.ErrUnexpectedEOF {
+			t.Fatalf("peer saw %v, want the transport closed after the partial record", err)
+		}
+	})
+
+	t.Run("transport read after partial input", func(t *testing.T) {
+		var pc *panickingTransport
+		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+			pc = &panickingTransport{Conn: c}
+			return pc
+		})
+		defer cleanup()
+		// Drain post-handshake messages so closing the transport is a clean FIN.
+		if _, err := srv.Write([]byte("x")); err != nil {
+			t.Fatalf("server write: %v", err)
+		}
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+			t.Fatalf("client read: %v", err)
+		}
+
+		atomic.StoreInt32(&pc.readPanics, 2)
+		defer atomic.StoreInt32(&pc.readPanics, 0)
+		if _, err := srv.Write([]byte("data")); err != nil {
+			t.Fatalf("server write: %v", err)
+		}
+		err := runWithoutPanic(t, func() error {
+			_, err := cli.Read(make([]byte, 16))
+			return err
+		})
+		if err == nil {
+			t.Fatal("read succeeded over a panicking transport")
+		}
+		srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		_, err = srv.Read(make([]byte, 16))
+		if ne, ok := err.(net.Error); err == nil || (ok && ne.Timeout()) {
+			t.Fatalf("peer saw %v, want the transport closed after the lost input", err)
+		}
+	})
+
+	t.Run("GetCertificate", func(t *testing.T) {
+		certPEM := loadFile(t, certPath("server-cert.pem"))
+		keyPEM := loadFile(t, certPath("server-key.pem"))
+		var called int32
+		serverConfig := &Config{
+			Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}},
+			GetCertificate: func(*ClientHelloInfo) (*Certificate, error) {
+				atomic.StoreInt32(&called, 1)
+				panic("certificate lookup failure")
+			},
+		}
+		cConn, sConn := lifecycleTCPPair(t)
+		cli := Client(cConn, &Config{ServerName: "localhost", InsecureSkipVerify: true})
+		defer cli.Close()
+		go cli.Handshake()
+		srv := Server(sConn, serverConfig)
+		defer srv.Close()
+		err := runWithoutPanic(t, srv.Handshake)
+		if atomic.LoadInt32(&called) == 0 {
+			t.Skip("wolfSSL built without WOLFSSL_CERT_SETUP_CB; GetCertificate not invoked")
+		}
+		if err == nil {
+			t.Fatal("handshake succeeded after GetCertificate panicked")
+		}
+	})
+}
+
+func lifecycleTCPPair(t *testing.T) (client, server net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, _ := ln.Accept()
+		accepted <- c
+	}()
+	client, err = net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	server = <-accepted
+	if server == nil {
+		client.Close()
+		t.Fatal("accept failed")
+	}
+	return client, server
+}
+
+// timeoutError is a net.Error that reports a deadline expiry.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+func TestClassifyWriteFailure(t *testing.T) {
+	var timeout error = timeoutError{}
+	cases := []struct {
+		name         string
+		errCode      int
+		transportErr error
+		dead, retry  bool
+	}{
+		{"timeout with record pending", sslErrorWantWrite, timeout, true, false},
+		{"wrapped timeout", sslErrorWantWrite, fmt.Errorf("w: %w", timeout), true, false},
+		{"transport stall", sslErrorWantWrite, nil, false, true},
+		{"wolfSSL wants input", sslErrorWantRead, nil, false, false},
+		{"wolfSSL wants input after a timeout", sslErrorWantRead, timeout, false, false},
+	}
+	for _, tc := range cases {
+		dead, retry := classifyWriteFailure(tc.errCode, tc.transportErr)
+		if dead != tc.dead || retry != tc.retry {
+			t.Errorf("%s: dead=%v retry=%v, want dead=%v retry=%v", tc.name, dead, retry, tc.dead, tc.retry)
+		}
+	}
+}
+
+// stallOnceConn returns (0, nil) from the first Write made while armed.
+type stallOnceConn struct {
+	net.Conn
+	armed int32
+}
+
+func (s *stallOnceConn) Write(b []byte) (int, error) {
+	if atomic.CompareAndSwapInt32(&s.armed, 1, 0) {
+		return 0, nil
+	}
+	return s.Conn.Write(b)
+}
+
+func TestWriteStallWithoutTimeoutIsRetried(t *testing.T) {
+	var sc *stallOnceConn
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		sc = &stallOnceConn{Conn: c}
+		return sc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&sc.armed, 1)
+	if _, err := cli.Write([]byte("first")); err != nil {
+		t.Fatalf("Write after a transport stall: %v", err)
+	}
+	if _, err := cli.Write([]byte("second")); err != nil {
+		t.Fatalf("later Write: %v", err)
+	}
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, len("firstsecond"))
+	if _, err := io.ReadFull(srv, got); err != nil || string(got) != "firstsecond" {
+		t.Fatalf("server read %q: %v", got, err)
+	}
+}
+
+// emptyConn returns (0, nil) from every Read and Write made while armed.
+type emptyConn struct {
+	net.Conn
+	reads, writes int32
+}
+
+func (e *emptyConn) Read(b []byte) (int, error) {
+	if atomic.LoadInt32(&e.reads) == 1 {
+		return 0, nil
+	}
+	return e.Conn.Read(b)
+}
+
+func (e *emptyConn) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&e.writes) == 1 {
+		return 0, nil
+	}
+	return e.Conn.Write(b)
+}
+
+func TestWriteWithoutProgressFails(t *testing.T) {
+	var ec *emptyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &emptyConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&ec.writes, 1)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Write([]byte("stuck"))
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if !errors.Is(err, io.ErrNoProgress) {
+			t.Fatalf("Write err = %v, want io.ErrNoProgress", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Write kept retrying a transport that makes no progress")
+	}
+	if _, err := cli.Write([]byte("later")); err == nil {
+		t.Fatal("Write succeeded after a possibly half-sent record")
+	}
+}
+
+func TestReadWithoutProgressFails(t *testing.T) {
+	var ec *emptyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &emptyConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+	if cli.sslMu == nil {
+		t.Skip("write dup splits the session; no shared input pump")
+	}
+
+	atomic.StoreInt32(&ec.reads, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.ErrNoProgress) {
+			t.Fatalf("Read err = %v, want io.ErrNoProgress", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read kept retrying a transport that makes no progress")
+	}
+}
+
+// readCounter counts transport Reads and signals each one.
+type readCounter struct {
+	net.Conn
+	reads   int32
+	entered chan struct{}
+}
+
+func (r *readCounter) Read(b []byte) (int, error) {
+	atomic.AddInt32(&r.reads, 1)
+	select {
+	case r.entered <- struct{}{}:
+	default:
+	}
+	return r.Conn.Read(b)
+}
+
+func TestSharedSessionInputPumpTakesTurns(t *testing.T) {
+	var rcnt *readCounter
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		rcnt = &readCounter{Conn: c, entered: make(chan struct{}, 1)}
+		return rcnt
+	})
+	defer cleanup()
+	if cli.sslMu == nil {
+		t.Skip("write dup splits the session; no shared input pump")
+	}
+	rc := cli.conn.(*recordingConn)
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+
+	// Drain post-handshake messages, then park a Read in the pump.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	for len(rcnt.entered) > 0 {
+		<-rcnt.entered
+	}
+	gen := rc.fillCount()
+	readDone := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 4)
+		n, _ := io.ReadFull(cli, buf)
+		readDone <- string(buf[:n])
+	}()
+	select {
+	case <-rcnt.entered:
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read never waited on the transport")
+	}
+	readsBefore := atomic.LoadInt32(&rcnt.reads)
+
+	// A writer needing input queues behind the parked Read instead of
+	// reading the transport itself, and returns once that input lands.
+	pumped := make(chan error, 1)
+	go func() { pumped <- cli.pumpInput(rc, gen) }()
+	if _, err := srv.Write([]byte("data")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	select {
+	case err := <-pumped:
+		if err != nil {
+			t.Fatalf("pump: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("writer pump did not return after input arrived")
+	}
+	select {
+	case got := <-readDone:
+		if got != "data" {
+			t.Fatalf("Read got %q", got)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read did not complete")
+	}
+	if extra := atomic.LoadInt32(&rcnt.reads) - readsBefore; extra != 0 {
+		t.Fatalf("writer pump read the transport %d extra times", extra)
+	}
+}
+
+func TestSendTimeoutClosesWritesInsideWolfSSLCall(t *testing.T) {
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	rc := cli.conn.(*recordingConn)
+
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	chunk := make([]byte, 16384)
+	failed := false
+	for i := 0; i < 4096 && !failed; i++ {
+		n, _ := cli.writeRecord(chunk)
+		failed = n <= 0
+	}
+	if !failed {
+		t.Fatal("write deadline never fired")
+	}
+	// No Write bookkeeping has run yet; a concurrent Read must already be
+	// unable to flush the half-sent record.
+	if !rc.writeClosed() {
+		t.Fatal("transport timeout left writes open after WolfSSL_write returned")
+	}
+}
+
+func TestReadAfterWriteTimeoutSendsNothing(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	// Consume post-handshake messages so closing the client does not reset
+	// the connection and discard what the server has yet to read.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+
+	const chunk = 16384
+	var want []byte
+	var err error
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	for i := 0; i < 2048 && err == nil; i++ {
+		msg := bytes.Repeat([]byte{byte(i)}, chunk)
+		var n int
+		n, err = cli.Write(msg)
+		want = append(want, msg[:n]...)
+	}
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	cli.SetWriteDeadline(time.Time{})
+
+	// A KeyUpdate request makes the client's Read want to send a reply.
+	srv.muWrite.Lock()
+	ret := sslRequestKeyUpdate(srv.sslWrite)
+	srv.muWrite.Unlock()
+	if ret != 1 {
+		t.Skipf("key update unavailable (%d)", ret)
+	}
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+
+	type result struct {
+		got   []byte
+		err   error
+		extra int
+	}
+	done := make(chan result, 1)
+	go func() {
+		srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		got := make([]byte, len(want))
+		_, err := io.ReadFull(srv, got)
+		extra := 0
+		if err == nil {
+			extra, _ = srv.Read(make([]byte, 1))
+		}
+		done <- result{got, err, extra}
+	}()
+	cli.Read(make([]byte, 4))
+	cli.Close()
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("server read of the reported bytes: %v", r.err)
+	}
+	if !bytes.Equal(r.got, want) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if r.extra != 0 {
+		t.Fatal("server received plaintext that Write reported as unsent")
+	}
+}
+
+func TestLargeWriteTimeoutReportsDeliveredBytes(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	// Consume post-handshake messages so closing the client does not reset
+	// the connection and discard what the server has yet to read.
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+
+	big := make([]byte, 64<<20)
+	for i := range big {
+		big[i] = byte(i / 16384)
+	}
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	n, err := cli.Write(big)
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	if n == 0 || n == len(big) {
+		t.Fatalf("Write reported %d of %d bytes; want a partial count", n, len(big))
+	}
+	cli.Close()
+
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, n)
+	if m, err := io.ReadFull(srv, got); err != nil {
+		t.Fatalf("server read %d of %d reported bytes: %v", m, n, err)
+	}
+	if !bytes.Equal(got, big[:n]) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if m, err := srv.Read(make([]byte, 1)); m != 0 || err == nil {
+		t.Fatalf("server received bytes beyond the %d Write reported (m=%d err=%v)", n, m, err)
+	}
+}
+
+// wrapErrConn wraps every transport error with %w, as net.Conn decorators do.
+type wrapErrConn struct{ net.Conn }
+
+func (w wrapErrConn) Read(b []byte) (int, error) {
+	n, err := w.Conn.Read(b)
+	if err != nil {
+		err = fmt.Errorf("wrapped read: %w", err)
+	}
+	return n, err
+}
+
+func (w wrapErrConn) Write(b []byte) (int, error) {
+	n, err := w.Conn.Write(b)
+	if err != nil {
+		err = fmt.Errorf("wrapped write: %w", err)
+	}
+	return n, err
+}
+
+func TestWrappedWriteTimeoutIsRecognized(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return wrapErrConn{c} })
+	defer cleanup()
+
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	var err error
+	msg := make([]byte, 16384)
+	for i := 0; i < 2048 && err == nil; i++ {
+		_, err = cli.Write(msg)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("wrapped write deadline error is not a timeout: %v", err)
+	}
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cli, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client read after wrapped write timeout %q: %v", reply, err)
+	}
+}
+
+func TestWriteTimeoutKeepsStreamConsistent(t *testing.T) {
+	cli, srv, cleanup := setupPair(t)
+	defer cleanup()
+
+	const chunk = 16384
+	var want []byte
+	var err error
+	cli.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+	for i := 0; i < 2048; i++ {
+		msg := bytes.Repeat([]byte{byte(i)}, chunk)
+		var n int
+		n, err = cli.Write(msg)
+		want = append(want, msg[:n]...)
+		if err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("write deadline never fired")
+	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("write deadline error is not a timeout: %v", err)
+	}
+	cli.SetWriteDeadline(time.Time{})
+
+	if n, err := cli.Write([]byte("different payload")); err == nil || n != 0 {
+		t.Fatalf("Write after a timed-out record: n=%d err=%v, want the timeout again", n, err)
+	}
+
+	// The read side is unaffected by the write timeout.
+	if _, err := srv.Write([]byte("pong")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cli, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client read after write timeout %q: %v", reply, err)
+	}
+
+	// The peer gets exactly the bytes Write reported, then no clean close.
+	cli.Close()
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	got := make([]byte, len(want))
+	if n, err := io.ReadFull(srv, got); err != nil {
+		t.Fatalf("server read %d of %d reported bytes: %v", n, len(want), err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("server stream differs from the bytes Write reported as written")
+	}
+	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil || err == io.EOF {
+		t.Fatalf("after the reported bytes: n=%d err=%v, want a truncation error", n, err)
+	}
+}
+
+var errAfterData = errors.New("transport error after data")
+
+// errAfterRecordConn, once armed, stages the next TLS record from the
+// transport and returns errAfterData together with its final bytes.
+type errAfterRecordConn struct {
+	net.Conn
+	armed  int32
+	staged []byte
+}
+
+func (e *errAfterRecordConn) Read(b []byte) (int, error) {
+	if len(e.staged) == 0 {
+		if atomic.LoadInt32(&e.armed) == 0 {
+			return e.Conn.Read(b)
+		}
+		hdr := make([]byte, 5)
+		if _, err := io.ReadFull(e.Conn, hdr); err != nil {
+			return 0, err
+		}
+		body := make([]byte, int(hdr[3])<<8|int(hdr[4]))
+		if _, err := io.ReadFull(e.Conn, body); err != nil {
+			return 0, err
+		}
+		e.staged = append(hdr, body...)
+		atomic.StoreInt32(&e.armed, 0)
+	}
+	n := copy(b, e.staged)
+	e.staged = e.staged[n:]
+	if len(e.staged) == 0 {
+		return n, errAfterData
+	}
+	return n, nil
+}
+
+func TestReadErrorComesFromCurrentCall(t *testing.T) {
+	var ec *errAfterRecordConn
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		ec = &errAfterRecordConn{Conn: c}
+		return ec
+	})
+	defer cleanup()
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+
+	// Drain post-handshake messages so the armed record is the application data.
+	buf := make([]byte, 3)
+	if _, err := srv.Write([]byte("one")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	if _, err := io.ReadFull(cli, buf); err != nil || string(buf) != "one" {
+		t.Fatalf("client read %q: %v", buf, err)
+	}
+
+	atomic.StoreInt32(&ec.armed, 1)
+	if _, err := srv.Write([]byte("two")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	n, err := cli.Read(buf)
+	if err != nil || string(buf[:n]) != "two" {
+		t.Fatalf("Read of data delivered with an error: %q, %v", buf[:n], err)
+	}
+	if _, err := cli.Read(buf); !errors.Is(err, errAfterData) {
+		t.Fatalf("next Read: got %v, want the transport error returned with the data", err)
+	}
+}
+
+func TestReadDistinguishesTruncationFromCloseNotify(t *testing.T) {
+	t.Run("transport closed without close_notify", func(t *testing.T) {
+		cli, srv, cleanup := setupPair(t)
+		defer cleanup()
+		srv.NetConn().Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v, want io.ErrUnexpectedEOF", err)
+		}
+	})
+
+	t.Run("wrapped transport EOF", func(t *testing.T) {
+		cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return wrapErrConn{c} })
+		defer cleanup()
+		srv.NetConn().Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v, want io.ErrUnexpectedEOF", err)
+		}
+	})
+
+	t.Run("close_notify", func(t *testing.T) {
+		cli, srv, cleanup := setupPair(t)
+		defer cleanup()
+		srv.Close()
+		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+		if _, err := cli.Read(make([]byte, 16)); err != io.EOF {
+			t.Fatalf("got %v, want io.EOF", err)
+		}
+	})
+}
+
+func TestCloseBeforeHandshake(t *testing.T) {
+	cConn, sConn := net.Pipe()
+	defer sConn.Close()
+	cli := Client(cConn, &Config{ServerName: "localhost", InsecureSkipVerify: true})
+	if err := cli.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	err := runWithoutPanic(t, func() error {
+		_, err := cli.Read(make([]byte, 16))
+		return err
+	})
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Read after Close: got %v, want net.ErrClosed", err)
+	}
+	err = runWithoutPanic(t, func() error {
+		_, err := cli.Write([]byte("data"))
+		return err
+	})
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Write after Close: got %v, want net.ErrClosed", err)
+	}
+	if err := runWithoutPanic(t, cli.Handshake); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Handshake after Close: got %v, want net.ErrClosed", err)
+	}
+}
+
+func TestConcurrentClose(t *testing.T) {
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	done := make(chan struct{}, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			cli.Close()
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		select {
+		case <-done:
+		case <-time.After(lifecycleTimeout):
+			t.Fatal("concurrent Close did not return")
+		}
+	}
+}
+
+var errNoDeadline = errors.New("deadlines not supported")
+
+// deadlineFreeConn is a transport whose deadline setters always fail.
+type deadlineFreeConn struct{ net.Conn }
+
+func (deadlineFreeConn) SetDeadline(time.Time) error      { return errNoDeadline }
+func (deadlineFreeConn) SetReadDeadline(time.Time) error  { return errNoDeadline }
+func (deadlineFreeConn) SetWriteDeadline(time.Time) error { return errNoDeadline }
+
+func TestCloseUnblocksReadWithoutDeadlines(t *testing.T) {
+	var raw net.Conn
+	var nc *notifyConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		raw = c
+		nc = newNotifyConn(deadlineFreeConn{c})
+		return nc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&nc.armed, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := cli.Read(make([]byte, 16))
+		readDone <- err
+	}()
+	select {
+	case <-nc.entered:
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("client Read never reached the transport")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- cli.Close() }()
+	select {
+	case <-closeDone:
+	case <-time.After(lifecycleTimeout):
+		raw.Close()
+		t.Fatal("Close blocked on a Read the transport deadline could not interrupt")
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("Read succeeded on a closed connection")
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("Read did not return after Close")
+	}
+}
+
+func TestIdleCloseWithoutDeadlinesSendsCloseNotify(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return deadlineFreeConn{c} })
+	defer cleanup()
+	if err := cli.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := srv.Read(make([]byte, 16)); err != io.EOF {
+		t.Fatalf("peer Read after Close: got %v, want io.EOF from close_notify", err)
+	}
+}
+
+// stuckWriteConn is a deadline-free transport whose Write, once armed, blocks until Close.
+type stuckWriteConn struct {
+	deadlineFreeConn
+	armed     int32
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (s *stuckWriteConn) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&s.armed) == 1 {
+		<-s.closed
+		return 0, net.ErrClosed
+	}
+	return s.deadlineFreeConn.Write(b)
+}
+
+var errStuckClosed = errors.New("stuck transport closed")
+
+func (s *stuckWriteConn) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
+	s.deadlineFreeConn.Close()
+	return errStuckClosed
+}
+
+func TestIdleCloseWithoutDeadlinesBoundsStuckShutdown(t *testing.T) {
+	var sc *stuckWriteConn
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		sc = &stuckWriteConn{deadlineFreeConn: deadlineFreeConn{c}, closed: make(chan struct{})}
+		return sc
+	})
+	defer cleanup()
+	atomic.StoreInt32(&sc.armed, 1)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- cli.Close() }()
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, errStuckClosed) {
+			t.Fatalf("Close: got %v, want the transport's Close error", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		sc.Close()
+		t.Fatal("Close blocked on a close_notify write the transport could not time out")
+	}
+}
+
+// kickHookConn runs onKick, once, when the first expired deadline is set.
+type kickHookConn struct {
+	net.Conn
+	kicked int32
+	onKick func()
+}
+
+func (k *kickHookConn) SetDeadline(t time.Time) error {
+	err := k.Conn.SetDeadline(t)
+	if !t.IsZero() && t.Before(time.Now()) && atomic.CompareAndSwapInt32(&k.kicked, 0, 1) {
+		k.onKick()
+	}
+	return err
+}
+
+func silentServerClientConfig() *Config {
+	return &Config{ServerName: "localhost", InsecureSkipVerify: true}
+}
+
+func TestHandshakeContextCancelRacingClose(t *testing.T) {
+	cConn, sConn := lifecycleTCPPair(t)
+	defer sConn.Close()
+	kc := &kickHookConn{Conn: cConn}
+	cli := Client(kc, silentServerClientConfig())
+	defer cli.Close()
+	kc.onKick = func() {
+		closed := make(chan struct{})
+		go func() {
+			cli.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(lifecycleTimeout):
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runWithoutPanic(t, func() error { return cli.HandshakeContext(ctx) }); err == nil {
+		t.Fatal("handshake succeeded with a canceled context")
+	}
+}
+
+func TestHandshakeContextCancelWithoutDeadlines(t *testing.T) {
+	cConn, sConn := lifecycleTCPPair(t)
+	defer sConn.Close()
+	cli := Client(deadlineFreeConn{cConn}, silentServerClientConfig())
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- cli.HandshakeContext(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("handshake succeeded against a silent server")
+		}
+	case <-time.After(lifecycleTimeout):
+		cConn.Close()
+		t.Fatal("HandshakeContext ignored cancellation on a transport without deadlines")
+	}
+}
+
+func TestHandshakeContextCanceledAfterHandshake(t *testing.T) {
+	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		return deadlineFreeConn{c}
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := cli.HandshakeContext(ctx); err != nil {
+		t.Fatalf("HandshakeContext on an established conn: %v", err)
+	}
+	if _, err := cli.Write([]byte("ping")); err != nil {
+		t.Fatalf("write after HandshakeContext: %v", err)
+	}
+	got := make([]byte, 4)
+	srv.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	if _, err := io.ReadFull(srv, got); err != nil || string(got) != "ping" {
+		t.Fatalf("server read %q: %v", got, err)
+	}
+}
+
+func TestHandshakeAbortedByCancelNotReportedAsSuccess(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+
+	atomic.StoreInt32(&cli.handshakeState, hsAborted)
+	if err := cli.Handshake(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("handshake after cancel closed the transport: got %v, want net.ErrClosed", err)
+	}
+	cli.mu.RLock()
+	leaked := cli.ssl != nil || cli.ctx != nil || cli.ioConnID != 0
+	cli.mu.RUnlock()
+	if leaked {
+		t.Fatal("wolfSSL session not released after an aborted handshake")
+	}
+}
+
+func TestHandshakeContextReturnsContextError(t *testing.T) {
+	t.Run("canceled", func(t *testing.T) {
+		cConn, sConn := lifecycleTCPPair(t)
+		defer sConn.Close()
+		cli := Client(cConn, silentServerClientConfig())
+		defer cli.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := cli.HandshakeContext(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		cConn, sConn := lifecycleTCPPair(t)
+		defer sConn.Close()
+		cli := Client(cConn, silentServerClientConfig())
+		defer cli.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := cli.HandshakeContext(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v, want context.DeadlineExceeded", err)
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("deadline cancellation is not classified as a timeout: %v", err)
+		}
+	})
+}
+
+var errVerifySentinel = errors.New("verify sentinel")
+
+func TestHandshakeContextKeepsHandshakeError(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kicked := make(chan struct{})
+	kc := &kickHookConn{Conn: cConn, onKick: func() { close(kicked) }}
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		cancel()
+		select {
+		case <-kicked:
+		case <-time.After(lifecycleTimeout):
+		}
+		return errVerifySentinel
+	}
+	cli := Client(kc, cfg)
+	defer cli.Close()
+
+	err := cli.HandshakeContext(ctx)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, errVerifySentinel) {
+		t.Fatalf("got %v, want both context.Canceled and the callback error", err)
+	}
+}
+
+func TestConnectionStateDuringHandshake(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+	go srv.Handshake()
+
+	done := make(chan error, 1)
+	go func() { done <- cli.Handshake() }()
+	var hsErr error
+	finished := false
+	deadline := time.After(lifecycleTimeout)
+	for !finished {
+		cli.ConnectionState()
+		select {
+		case hsErr = <-done:
+			finished = true
+		case <-deadline:
+			cConn.Close()
+			t.Fatal("handshake did not complete")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if hsErr != nil {
+		t.Fatalf("handshake: %v", hsErr)
+	}
+	if !cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState not populated after handshake")
+	}
+}
+
+func TestConnectionStateFromVerifyCallback(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	var cli *Conn
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		cli.ConnectionState()
+		return nil
+	}
+	cli = Client(cConn, cfg)
+	done := make(chan error, 1)
+	go func() { done <- cli.Handshake() }()
+	select {
+	case err := <-done:
+		cli.Close()
+		if err != nil {
+			t.Fatalf("handshake: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("ConnectionState blocked inside VerifyConnection")
+	}
+}
+
+func TestConnectionStateNotCompleteUntilVerified(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+
+	var cli *Conn
+	sawComplete := false
+	cfg := silentServerClientConfig()
+	cfg.VerifyConnection = func(ConnectionState) error {
+		sawComplete = cli.ConnectionState().HandshakeComplete
+		return errVerifySentinel
+	}
+	cli = Client(cConn, cfg)
+	defer cli.Close()
+
+	if err := cli.Handshake(); !errors.Is(err, errVerifySentinel) {
+		t.Fatalf("handshake: got %v, want the verification error", err)
+	}
+	if sawComplete {
+		t.Fatal("ConnectionState reported a complete handshake while verification was pending")
+	}
+	if cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState reports a complete handshake after verification failed")
+	}
+}
+
+func TestAbortedHandshakeStateNotPublished(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+	cConn, sConn := lifecycleTCPPair(t)
+	srv := Server(sConn, &Config{Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}}})
+	defer srv.Close()
+	go srv.Handshake()
+	cli := Client(cConn, silentServerClientConfig())
+	defer cli.Close()
+
+	atomic.StoreInt32(&cli.handshakeState, hsAborted)
+	if err := cli.Handshake(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("got %v, want net.ErrClosed", err)
+	}
+	if cli.ConnectionState().HandshakeComplete {
+		t.Fatal("ConnectionState reports an aborted handshake as complete")
+	}
+}
+
+// transportUseCounter counts transport writes and deadline changes while armed.
+type transportUseCounter struct {
+	net.Conn
+	armed  int32
+	writes int32
+	resets int32
+}
+
+func (c *transportUseCounter) count(n *int32) {
+	if atomic.LoadInt32(&c.armed) == 1 {
+		atomic.AddInt32(n, 1)
+	}
+}
+
+func (c *transportUseCounter) Write(b []byte) (int, error) {
+	c.count(&c.writes)
+	return c.Conn.Write(b)
+}
+
+func (c *transportUseCounter) SetDeadline(t time.Time) error {
+	c.count(&c.resets)
+	return c.Conn.SetDeadline(t)
+}
+
+func TestFinalizerDoesNoTransportIO(t *testing.T) {
+	var cc *transportUseCounter
+	cli, _, cleanup := setupPairWith(t, func(c net.Conn) net.Conn {
+		cc = &transportUseCounter{Conn: c}
+		return cc
+	})
+	defer cleanup()
+
+	atomic.StoreInt32(&cc.armed, 1)
+	cli.finalize()
+	atomic.StoreInt32(&cc.armed, 0)
+	if w, d := atomic.LoadInt32(&cc.writes), atomic.LoadInt32(&cc.resets); w != 0 || d != 0 {
+		t.Fatalf("finalizer touched the transport: %d writes, %d deadline changes", w, d)
+	}
+}
+
+// CI sets WOLFTLS_EXPECT_WRITE_DUP so each build is known to run the
+// session layout it was configured for.
+func TestWriteDupLayoutMatchesBuild(t *testing.T) {
+	want := os.Getenv("WOLFTLS_EXPECT_WRITE_DUP")
+	if want == "" {
+		t.Skip("WOLFTLS_EXPECT_WRITE_DUP not set")
+	}
+	cli, _, cleanup := setupPair(t)
+	defer cleanup()
+	if split := cli.sslWrite != cli.ssl; split != (want == "1") {
+		t.Fatalf("separate write session = %v, WOLFTLS_EXPECT_WRITE_DUP = %s", split, want)
+	}
+}

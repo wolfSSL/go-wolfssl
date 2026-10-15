@@ -2,8 +2,7 @@ name: Publish CI image
 
 on:
   push:
-    # The CI branch bootstraps GHCR before this workflow reaches master.
-    branches: [master, ci/ghcr-ci-image]
+    branches: [master]
     paths:
       - '.github/docker/go-wolfssl-ci/**'
       - '.github/workflows/publish-ci-image.yml'
@@ -19,9 +18,7 @@ concurrency:
 jobs:
   publish:
     name: Publish CI image
-    if: >-
-      github.repository == 'wolfSSL/go-wolfssl' &&
-      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/ci/ghcr-ci-image')
+    if: github.repository == 'wolfSSL/go-wolfssl' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

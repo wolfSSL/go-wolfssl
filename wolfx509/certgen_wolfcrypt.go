@@ -57,12 +57,23 @@ package wolfx509
 // static void wolfx509_set_basic_const(Cert* cert, int toggle) {
 //     cert->basicConstSet = (toggle != 0);
 // }
+//
+// /* WOLFSSL_CERT_GEN_CACHE keeps the issuer DER and a decoded copy in cert. */
+// static void wolfx509_cert_free_cache(Cert* cert) {
+// #ifdef WOLFSSL_CERT_GEN_CACHE
+//     wc_SetCert_Free(cert);
+// #else
+//     (void)cert;
+// #endif
+// }
 import "C"
 import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -84,6 +95,7 @@ const (
 	wcKeyUsageCertSign         = 0x0004
 	wcKeyUsageCRLSign          = 0x0002
 	wcKeyUsageEncipherOnly     = 0x0001
+	wcKeyUsageDecipherOnly     = 0x8000
 )
 
 // Extended key usage bits in wolfCrypt's EXTKEYUSE_* layout.
@@ -116,15 +128,16 @@ func sigTypeFor(alg handles.Algorithm) (int, error) {
 // All fields are optional unless marked otherwise. NotBefore/NotAfter is
 // ignored by CSR generation (CSRs don't carry validity) and required otherwise.
 type certBuildOpts struct {
-	SubjectCN   string    // CommonName; truncated if >= 64 bytes
-	Serial      []byte    // up to 20 bytes; ignored for CSRs, generated if empty
-	NotBefore   time.Time // Date marking the start of validity
-	NotAfter    time.Time // Date marking the end of validity
-	IsCA        bool      // BasicConstraints CA:TRUE
-	KeyUsage    int       // OR of wcKeyUsage* constants
-	ExtKeyUsage int       // OR of wcExtKeyUsage* constants
-	DNSNames    []string  // SubjectAltName dNSName entries
-	IPAddresses []net.IP  // SubjectAltName iPAddress entries
+	SubjectCN      string    // CommonName; error if >= CTC_NAME_SIZE bytes or contains NUL
+	Serial         []byte    // up to CTC_SERIAL_SIZE bytes; ignored for CSRs, generated if empty
+	NotBefore      time.Time // Date marking the start of validity
+	NotAfter       time.Time // Date marking the end of validity
+	IsCA           bool      // BasicConstraints CA:TRUE
+	KeyUsage       int       // OR of wcKeyUsage* constants
+	ExtKeyUsage    int       // OR of wcExtKeyUsage* constants
+	DNSNames       []string  // SubjectAltName dNSName entries
+	EmailAddresses []string  // SubjectAltName rfc822Name entries
+	IPAddresses    []net.IP  // SubjectAltName iPAddress entries
 
 	// BasicConstraintsValid requests the BasicConstraints extension.
 	BasicConstraintsValid bool
@@ -169,6 +182,13 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	if signerKey.CRngPtr() == nil {
 		return nil, errors.New("wolfx509: signerKey has no RNG, and cannot sign")
 	}
+	for _, k := range []KeyHandle{pubKey, signerKey} {
+		if lk, ok := k.(interface{ IsLive() bool }); ok && !lk.IsLive() {
+			return nil, errors.New("wolfx509: key has been freed")
+		}
+	}
+	defer runtime.KeepAlive(signerKey)
+	defer runtime.KeepAlive(pubKey)
 	if pubKey.Algorithm() != signerKey.Algorithm() {
 		return nil, fmt.Errorf("wolfx509: pubKey algorithm %d does not match signerKey algorithm %d",
 			pubKey.Algorithm(), signerKey.Algorithm())
@@ -181,6 +201,9 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 	if max := int(C.CTC_NAME_SIZE); len(opts.SubjectCN) >= max {
 		return nil, fmt.Errorf("wolfx509: SubjectCN %d bytes >= %d max", len(opts.SubjectCN), max)
+	}
+	if strings.IndexByte(opts.SubjectCN, 0) >= 0 {
+		return nil, errors.New("wolfx509: SubjectCN contains a NUL byte")
 	}
 
 	sigType, err := sigTypeFor(pubKey.Algorithm())
@@ -237,8 +260,8 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 		cert.subject.commonName[len(cnBytes)] = 0
 	}
 
-	if len(opts.DNSNames) > 0 || len(opts.IPAddresses) > 0 {
-		sans, err := buildSANsDER(opts.DNSNames, opts.IPAddresses)
+	if len(opts.DNSNames) > 0 || len(opts.EmailAddresses) > 0 || len(opts.IPAddresses) > 0 {
+		sans, err := buildSANsDER(opts.DNSNames, opts.EmailAddresses, opts.IPAddresses)
 		if err != nil {
 			return nil, fmt.Errorf("wolfx509: build SANs: %w", err)
 		}
@@ -251,8 +274,11 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 
 	if len(parentDER) > 0 {
+		cParentDER := C.CBytes(parentDER)
+		defer C.free(cParentDER)
+		defer C.wolfx509_cert_free_cache(&cert)
 		if ret := int(C.wc_SetIssuerBuffer(&cert,
-			(*C.byte)(unsafe.Pointer(&parentDER[0])), C.int(len(parentDER)))); ret != 0 {
+			(*C.byte)(cParentDER), C.int(len(parentDER)))); ret != 0 {
 			return nil, fmt.Errorf("wolfCrypt: wc_SetIssuerBuffer: %d", ret)
 		}
 	}
@@ -295,15 +321,28 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	return derOut[:signedSz], nil
 }
 
-// buildSANsDER serializes dnsNames + ipAddresses as an ASN.1 SEQUENCE of
-// GeneralName CHOICE elements (RFC 5280 §4.2.1.6). Context-specific
-// implicit tags: dNSName=[2] IA5String, iPAddress=[7] OCTET STRING.
-func buildSANsDER(dnsNames []string, ipAddresses []net.IP) ([]byte, error) {
+// buildSANsDER serializes dnsNames + emails + ipAddresses as an ASN.1
+// SEQUENCE of GeneralName CHOICE elements (RFC 5280 §4.2.1.6).
+// Context-specific implicit tags: rfc822Name=[1] IA5String,
+// dNSName=[2] IA5String, iPAddress=[7] OCTET STRING.
+func buildSANsDER(dnsNames, emails []string, ipAddresses []net.IP) ([]byte, error) {
 	var entries []asn1.RawValue
 	for _, name := range dnsNames {
+		if !isIA5String(name) {
+			return nil, fmt.Errorf("DNS SAN %q is not a non-empty IA5String without NUL (use IDNA A-labels)", name)
+		}
 		entries = append(entries, asn1.RawValue{
 			Tag: 2, Class: asn1.ClassContextSpecific, IsCompound: false,
 			Bytes: []byte(name),
+		})
+	}
+	for _, email := range emails {
+		if !isIA5String(email) {
+			return nil, fmt.Errorf("email SAN %q is not a non-empty IA5String without NUL", email)
+		}
+		entries = append(entries, asn1.RawValue{
+			Tag: 1, Class: asn1.ClassContextSpecific, IsCompound: false,
+			Bytes: []byte(email),
 		})
 	}
 	for _, ip := range ipAddresses {
@@ -320,4 +359,17 @@ func buildSANsDER(dnsNames []string, ipAddresses []net.IP) ([]byte, error) {
 		})
 	}
 	return asn1.Marshal(entries)
+}
+
+// isIA5String reports whether s is non-empty 7-bit ASCII with no NUL bytes.
+func isIA5String(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 || s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

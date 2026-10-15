@@ -22,6 +22,7 @@ package wolfx509
 
 import (
 	"bytes"
+	"encoding/asn1"
 	"fmt"
 	"math/big"
 	"net"
@@ -36,6 +37,7 @@ import (
 
 // Certificate is a parsed X.509 certificate. Fields are populated in
 // Go memory at parse time so reads are safe without holding any lock.
+// RawSubject and RawIssuer are not populated by ParseCertificate.
 // The underlying wolfSSL *WOLFSSL_X509 is retained for Verify and is
 // freed when Free is called or the Certificate is garbage-collected.
 type Certificate struct {
@@ -52,6 +54,7 @@ type Certificate struct {
 	IsCA                  bool
 	KeyUsage              KeyUsage
 	ExtKeyUsage           []ExtKeyUsage
+	UnknownExtKeyUsage    []asn1.ObjectIdentifier
 	EmailAddresses        []string
 	DNSNames              []string
 	IPAddresses           []net.IP
@@ -69,9 +72,9 @@ type Certificate struct {
 	AcmeKeyAuth []byte
 
 	// PublicKey is populated by ParseCertificate from the SPKI when the
-	// algorithm is supported (only AlgECDSAP256 today). Owned by the
-	// Certificate and released in Free(); set by template callers
-	// is ignored by the builder.
+	// algorithm is supported (only AlgECDSAP256 today). Free releases it;
+	// use DetachPublicKey to keep it past Free. Set by template callers is
+	// ignored by the builder.
 	PublicKey KeyHandle
 
 	// mu guards the underlying *WOLFSSL_X509 against use-after-free
@@ -115,6 +118,10 @@ const (
 	ExtKeyUsageIPSECUser
 	ExtKeyUsageTimeStamping
 	ExtKeyUsageOCSPSigning
+	ExtKeyUsageMicrosoftServerGatedCrypto
+	ExtKeyUsageNetscapeServerGatedCrypto
+	ExtKeyUsageMicrosoftCommercialCodeSigning
+	ExtKeyUsageMicrosoftKernelCodeSigning
 )
 
 // ParseCertificate parses a DER-encoded X.509 certificate. Returns a
@@ -134,6 +141,10 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 		// even when NAME_get_text_by_NID doesn't find the RDN by number.
 		subject.CommonName = wolfSSL.WolfSSL_X509_get_subjectCN(x)
 	}
+	issuer := nameFromWolfSSL(wolfSSL.WolfSSL_X509_get_issuer_name(x))
+	if issuer.CommonName == "" {
+		issuer.CommonName = issuerCommonName(der)
+	}
 
 	notBefore, err := parseASN1Time(wolfSSL.WolfSSL_X509_get_notBefore_str(x))
 	if err != nil {
@@ -150,7 +161,7 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 		x:         x,
 		Raw:       append([]byte(nil), der...),
 		Subject:   subject,
-		Issuer:    nameFromWolfSSL(wolfSSL.WolfSSL_X509_get_issuer_name(x)),
+		Issuer:    issuer,
 		NotBefore: notBefore,
 		NotAfter:  notAfter,
 	}
@@ -167,6 +178,11 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 	// and for CAs that omit the extension, in which case this stays nil
 	// and callers must fall back (e.g. expiry-based renewal).
 	c.AuthorityKeyId = wolfSSL.WolfSSL_X509_get_authority_key_id(x)
+
+	if err := parseExtensions(c, x); err != nil {
+		wolfSSL.WolfSSL_X509_free(x)
+		return nil, err
+	}
 
 	// RawSubject / RawIssuer: re-encode the names via i2d. wolfSSL exposes
 	// i2d_X509_NAME but it's not universally available in the OpenSSL-extra
@@ -212,16 +228,29 @@ func parseSpkiAsKeyHandle(x *wolfSSL.WOLFSSL_X509) (KeyHandle, bool) {
 // PublicKey. Safe to call multiple times and from multiple goroutines.
 // After Free, Verify returns ErrInvalidCert, but the copied Go-memory
 // fields remain readable.
-func (c *Certificate) Free() {
+func (c *Certificate) Free() { c.release(true) }
+
+// DetachPublicKey removes PublicKey from c and returns it; the caller then
+// owns it and releases it with FreeKey.
+func (c *Certificate) DetachPublicKey() KeyHandle {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := c.PublicKey
+	c.PublicKey = nil
+	c.publicKeyOwned = false
+	return k
+}
+
+func (c *Certificate) release(freeKey bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.x != nil {
 		wolfSSL.WolfSSL_X509_free(c.x)
 		c.x = nil
 	}
-	if c.publicKeyOwned && c.PublicKey != nil {
-		if k, ok := c.PublicKey.(*handles.EccKey); ok {
-			k.Free()
+	if c.publicKeyOwned {
+		if freeKey {
+			FreeKey(c.PublicKey)
 		}
 		c.PublicKey = nil
 		c.publicKeyOwned = false
@@ -229,8 +258,9 @@ func (c *Certificate) Free() {
 	runtime.SetFinalizer(c, nil)
 }
 
-// finalize is the finalizer wrapper (stable method pointer for SetFinalizer).
-func (c *Certificate) finalize() { c.Free() }
+// finalize must not free PublicKey: a caller may still hold it, and it has
+// its own finalizer.
+func (c *Certificate) finalize() { c.release(false) }
 
 // Equal reports whether two certificates are the same on the wire.
 func (c *Certificate) Equal(other *Certificate) bool {
@@ -260,22 +290,33 @@ func (c *Certificate) VerifyHostname(host string) error {
 // walks the input slicing successive SEQUENCEs and delegating each to
 // ParseCertificate.
 func ParseCertificates(der []byte) ([]*Certificate, error) {
+	return parseCertificates(der, ParseCertificate)
+}
+
+// parseCertificates takes the per-certificate parser so tests can observe it.
+func parseCertificates(der []byte, parse func([]byte) (*Certificate, error)) ([]*Certificate, error) {
 	if len(der) == 0 {
 		return nil, ErrInvalidCert
 	}
 	var out []*Certificate
+	fail := func(err error) ([]*Certificate, error) {
+		for _, c := range out {
+			c.Free()
+		}
+		return nil, err
+	}
 	rest := der
 	for len(rest) > 0 {
 		n, err := derSequenceLen(rest)
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 		if n > len(rest) {
-			return nil, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, n, len(rest))
+			return fail(fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, n, len(rest)))
 		}
-		cert, err := ParseCertificate(rest[:n])
+		cert, err := parse(rest[:n])
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 		out = append(out, cert)
 		rest = rest[n:]
@@ -285,8 +326,8 @@ func ParseCertificates(der []byte) ([]*Certificate, error) {
 
 // derSequenceLen returns the total length (header + content) of the
 // top-level ASN.1 SEQUENCE that begins at b[0]. Errors if the buffer
-// doesn't start with a SEQUENCE tag (0x30) or is too short to contain
-// the length field.
+// doesn't start with a SEQUENCE tag (0x30), is too short to contain
+// the length field, or is shorter than the encoded length.
 func derSequenceLen(b []byte) (int, error) {
 	if len(b) < 2 {
 		return 0, fmt.Errorf("%w: too short for ASN.1 header", ErrInvalidCert)
@@ -296,6 +337,9 @@ func derSequenceLen(b []byte) (int, error) {
 	}
 	first := b[1]
 	if first&0x80 == 0 {
+		if 2+int(first) > len(b) {
+			return 0, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, 2+int(first), len(b))
+		}
 		return 2 + int(first), nil
 	}
 	nlen := int(first & 0x7f)
@@ -305,11 +349,14 @@ func derSequenceLen(b []byte) (int, error) {
 	if len(b) < 2+nlen {
 		return 0, fmt.Errorf("%w: truncated length field", ErrInvalidCert)
 	}
-	n := 0
+	var n uint64
 	for i := 0; i < nlen; i++ {
-		n = (n << 8) | int(b[2+i])
+		n = (n << 8) | uint64(b[2+i])
 	}
-	return 2 + nlen + n, nil
+	if total := uint64(2+nlen) + n; total > uint64(len(b)) {
+		return 0, fmt.Errorf("%w: truncated cert: need %d bytes, have %d", ErrInvalidCert, total, len(b))
+	}
+	return 2 + nlen + int(n), nil
 }
 
 // PublicECCRawXY extracts the leaf certificate's ECDSA P-256 public point

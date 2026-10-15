@@ -22,8 +22,13 @@ package wolfx509
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -123,18 +128,15 @@ func TestCreateSelfSignedWithSANs(t *testing.T) {
 		t.Errorf("got %d IP SANs, want 2 — %v", len(stdCert.IPAddresses), stdCert.IPAddresses)
 	}
 
-	// KeyUsage + ExtKeyUsage flow-through.
-	wantKU := 0x80 | 0x20 // digitalSignature | keyEncipherment (RFC 5280 ordering)
-	gotKU := int(stdCert.KeyUsage)
-	// crypto/x509's KeyUsage constants happen to match RFC 5280 bit
-	// positions but with bit 0 = digitalSignature (not 0x80). Just check
-	// that both flags were set, rather than the numeric value.
-	_ = wantKU
-	if gotKU == 0 {
-		t.Errorf("stdlib parsed zero KeyUsage")
+	// KeyUsage + ExtKeyUsage flow-through. wolfx509's constants share
+	// crypto/x509's values, so the parsed values compare directly.
+	if got, want := KeyUsage(stdCert.KeyUsage), KeyUsageDigitalSignature|KeyUsageKeyEncipherment; got != want {
+		t.Errorf("stdlib KeyUsage = %#x, want %#x", got, want)
 	}
-	if len(stdCert.ExtKeyUsage) != 2 {
-		t.Errorf("got %d ExtKeyUsage entries, want 2", len(stdCert.ExtKeyUsage))
+	if len(stdCert.ExtKeyUsage) != 2 ||
+		ExtKeyUsage(stdCert.ExtKeyUsage[0]) != ExtKeyUsageServerAuth ||
+		ExtKeyUsage(stdCert.ExtKeyUsage[1]) != ExtKeyUsageClientAuth {
+		t.Errorf("stdlib ExtKeyUsage = %v, want [ServerAuth ClientAuth]", stdCert.ExtKeyUsage)
 	}
 }
 
@@ -402,6 +404,26 @@ func TestResolveValidity(t *testing.T) {
 	}
 }
 
+func TestResolveValidityLargeValidDays(t *testing.T) {
+	// Both exceed time.Duration's ~292-year range but stay below year 9999.
+	for _, days := range []int{106752, 213504} {
+		lo := time.Now().UTC()
+		_, na, err := resolveValidity(time.Time{}, time.Time{}, days)
+		if err != nil {
+			t.Errorf("ValidDays=%d: unexpected error %v", days, err)
+			continue
+		}
+		if want := lo.AddDate(0, 0, days-1); na.Before(want) {
+			t.Errorf("ValidDays=%d: NotAfter = %s, want after %s", days, na, want)
+		}
+	}
+	for _, days := range []int{maxValidDays + 1, int(^uint(0) >> 1)} {
+		if _, na, err := resolveValidity(time.Time{}, time.Time{}, days); err == nil {
+			t.Errorf("ValidDays=%d: NotAfter = %s, want error", days, na)
+		}
+	}
+}
+
 func TestEncodeValidityTime(t *testing.T) {
 	cases := []struct {
 		name string
@@ -584,5 +606,215 @@ func TestBasicConstraintsMatrix(t *testing.T) {
 				t.Fatal("BasicConstraints extension missing")
 			}
 		})
+	}
+}
+
+func TestCreateCertificateEmailSANs(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	emails := []string{"admin@example.com", "ops@example.org"}
+	tmpl := &Certificate{
+		SerialNumber:   big.NewInt(3),
+		Subject:        Name{CommonName: "email-san"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(24 * time.Hour),
+		DNSNames:       []string{"host.example"},
+		EmailAddresses: emails,
+	}
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	stdCert, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib parse: %v", err)
+	}
+	if len(stdCert.EmailAddresses) != len(emails) ||
+		stdCert.EmailAddresses[0] != emails[0] || stdCert.EmailAddresses[1] != emails[1] {
+		t.Errorf("cert EmailAddresses = %v, want %v", stdCert.EmailAddresses, emails)
+	}
+
+	csrDER, err := CreateCertificateRequest(&CertificateRequest{
+		Subject:        Name{CommonName: "email-san"},
+		EmailAddresses: emails,
+	}, k)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	stdCSR, err := stdlibParseCSR(csrDER)
+	if err != nil {
+		t.Fatalf("stdlib parse CSR: %v", err)
+	}
+	if len(stdCSR.EmailAddresses) != len(emails) ||
+		stdCSR.EmailAddresses[0] != emails[0] || stdCSR.EmailAddresses[1] != emails[1] {
+		t.Errorf("CSR EmailAddresses = %v, want %v", stdCSR.EmailAddresses, emails)
+	}
+
+	for _, bad := range []string{"usér@example.com", "a\x00b@example.com"} {
+		tmpl.EmailAddresses = []string{bad}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted email SAN %q", bad)
+		}
+	}
+}
+
+func TestCreateCertificateRejectsNonPositiveSerial(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	for _, serial := range []*big.Int{big.NewInt(0), big.NewInt(-5)} {
+		tmpl := &Certificate{
+			SerialNumber: serial,
+			Subject:      Name{CommonName: "serial"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted serial %v", serial)
+		}
+	}
+}
+
+func TestCreateCertificateRejectsCommonNameWithNUL(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "good.example\x00evil.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+		t.Error("CreateCertificate accepted a CommonName containing NUL")
+	}
+	if _, err := CreateCertificateRequest(&CertificateRequest{Subject: tmpl.Subject}, k); err == nil {
+		t.Error("CreateCertificateRequest accepted a CommonName containing NUL")
+	}
+}
+
+func TestCreateCertificateRejectsNonIA5DNSNames(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	for _, bad := range []string{"bücher.example", "a\x00b.example", ""} {
+		tmpl := &Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      Name{CommonName: "dns"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			DNSNames:     []string{bad},
+		}
+		if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+			t.Errorf("CreateCertificate accepted DNS SAN %q", bad)
+		}
+		if _, err := CreateCertificateRequest(&CertificateRequest{DNSNames: []string{bad}}, k); err == nil {
+			t.Errorf("CreateCertificateRequest accepted DNS SAN %q", bad)
+		}
+	}
+}
+
+func TestCheckEncodedKeyUsageRejectsMisencoding(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyAgreement | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := KeyUsageKeyAgreement | KeyUsageDecipherOnly
+	if err := checkEncodedKeyUsage(der, want); !errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Errorf("digitalSignature in place of decipherOnly: err = %v, want ErrUnsupportedCreateMode", err)
+	}
+	if err := checkEncodedKeyUsage(der, KeyUsageKeyAgreement|KeyUsageDigitalSignature); err != nil {
+		t.Errorf("matching key usage rejected: %v", err)
+	}
+}
+
+func TestCreateCertificateRejectsDecipherOnlyWithoutKeyAgreement(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "decipher-only alone"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     KeyUsageDecipherOnly,
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); err == nil {
+		t.Error("CreateCertificate accepted KeyUsageDecipherOnly without KeyUsageKeyAgreement")
+	}
+}
+
+func TestCreateCertificateKeyUsageDecipherOnly(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	want := KeyUsageKeyAgreement | KeyUsageDecipherOnly
+	tmpl := &Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      Name{CommonName: "decipher-only"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     want,
+	}
+	der, err := CreateCertificate(tmpl, tmpl, k, k)
+	if errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Skipf("this wolfSSL cannot encode decipherOnly, and says so: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	stdCert, err := stdlibParseCert(der)
+	if err != nil {
+		t.Fatalf("stdlib parse: %v", err)
+	}
+	if got := KeyUsage(stdCert.KeyUsage); got != want {
+		t.Errorf("KeyUsage = %#x, want %#x", got, want)
+	}
+}
+
+func TestCreateCertificateRejectsUnknownExtKeyUsage(t *testing.T) {
+	k, err := GenerateP256Key()
+	if err != nil {
+		t.Fatalf("GenerateP256Key: %v", err)
+	}
+	defer k.Free()
+
+	tmpl := &Certificate{
+		SerialNumber:       big.NewInt(1),
+		Subject:            Name{CommonName: "custom-eku"},
+		NotBefore:          time.Now().Add(-time.Hour),
+		NotAfter:           time.Now().Add(24 * time.Hour),
+		UnknownExtKeyUsage: []asn1.ObjectIdentifier{{1, 3, 6, 1, 4, 1, 99999, 1}},
+	}
+	if _, err := CreateCertificate(tmpl, tmpl, k, k); !errors.Is(err, ErrUnsupportedCreateMode) {
+		t.Errorf("UnknownExtKeyUsage: err = %v, want ErrUnsupportedCreateMode", err)
 	}
 }

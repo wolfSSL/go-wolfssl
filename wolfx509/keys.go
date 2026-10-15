@@ -30,3 +30,11 @@ import (
 func GenerateP256Key() (*handles.EccKey, error) {
 	return handles.GenerateP256Key()
 }
+
+// FreeKey releases k's wolfCrypt resources if its implementation supports
+// it, as *handles.EccKey does, for example a key from DetachPublicKey.
+func FreeKey(k KeyHandle) {
+	if f, ok := k.(interface{ Free() }); ok {
+		f.Free()
+	}
+}

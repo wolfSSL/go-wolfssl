@@ -75,13 +75,17 @@ func (d *digest) Size() int { return Size }
 // BlockSize returns the hash's underlying block size.
 func (d *digest) BlockSize() int { return BlockSize }
 
-// Write adds more data to the running hash.
+// sha256Update is replaced by tests to simulate a wolfCrypt failure.
+var sha256Update = wolfSSL.Wc_Sha256Update
+
+// Write adds more data to the running hash. It never returns an error, per
+// the hash.Hash contract; a wolfCrypt failure panics.
 func (d *digest) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if ret := wolfSSL.Wc_Sha256Update(&d.sha, p, len(p)); ret != 0 {
-		return 0, fmt.Errorf("wolfSSL/sha256: Wc_Sha256Update: %d", ret)
+	if ret := sha256Update(&d.sha, p, len(p)); ret != 0 {
+		panic(fmt.Sprintf("wolfSSL/sha256: Wc_Sha256Update: %d", ret))
 	}
 	return len(p), nil
 }

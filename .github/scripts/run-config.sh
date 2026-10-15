@@ -65,6 +65,8 @@ config() {
     reduced2)
         FLAGS="--disable-sha256 --disable-rsa --enable-pwdbased"
         FLAGS="$FLAGS --disable-pkcs8 --disable-pkcs12 CPPFLAGS=-DWOLFSSL_NO_PEM"
+        # wolfSSL's own unit tests, and 5.9.4's random.c under -Werror, break without SHA-256.
+        FLAGS="$FLAGS --disable-examples ac_cv_vcs_checkout=no"
         HAVE="NO_SHA256 NO_RSA NO_PKCS8 WOLFSSL_NO_PEM"
         BUILD=". ./wolftls ./handles" EXAMPLES=0 ;;
     certgen-noext)

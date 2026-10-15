@@ -19,9 +19,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
-  cancel-in-progress: true
 # END OF COMMON SECTION
 
 permissions:

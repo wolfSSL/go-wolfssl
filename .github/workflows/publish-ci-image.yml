@@ -1,0 +1,90 @@
+name: Publish CI image
+
+on:
+  push:
+    # The CI branch bootstraps GHCR before this workflow reaches master.
+    branches: [master, ci/ghcr-ci-image]
+    paths:
+      - '.github/docker/go-wolfssl-ci/**'
+      - '.github/workflows/publish-ci-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-ci-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish CI image
+    if: >-
+      github.repository == 'wolfSSL/go-wolfssl' &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/ci/ghcr-ci-image')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, smoke-test, and push image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/docker/go-wolfssl-ci/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          tags: |
+            ghcr.io/wolfssl/go-wolfssl-ci:latest
+            ghcr.io/wolfssl/go-wolfssl-ci:sha-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/wolfssl/go-wolfssl-ci:latest
+          cache-to: type=inline
+      - name: Report the image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "::notice::ghcr.io/wolfssl/go-wolfssl-ci@$DIGEST"
+
+  smoke:
+    name: Test published CI image
+    needs: publish
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@${{ needs.publish.outputs.digest }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash -e {0}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Exercise installed tools
+        run: go-wolfssl-ci-smoke
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+  public:
+    name: Check anonymous pulls for fork PRs
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pull the manifest without credentials
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          if ! docker manifest inspect "ghcr.io/wolfssl/go-wolfssl-ci@$DIGEST" > /dev/null; then
+            echo '::error::Make the go-wolfssl-ci package public in its GHCR package settings before merging the consumer workflows.'
+            exit 1
+          fi

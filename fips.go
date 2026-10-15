@@ -24,6 +24,7 @@ package wolfSSL
 // #include <wolfssl/wolfcrypt/types.h>
 // #include <wolfssl/wolfcrypt/random.h>
 // #include <wolfssl/wolfcrypt/fips_test.h>
+// #include <stdio.h>
 // #ifndef WC_RNG_SEED_CB
 // typedef int (*wc_RngSeed_Cb)(OS_Seed* os, byte* seed, word32 sz);
 // int wc_SetSeed_Cb(wc_RngSeed_Cb cb) {

@@ -65,6 +65,41 @@ package wolfSSL
 // 	return;
 // }
 // #endif
+// static int wc_go_gateForced = 0;
+// static int wc_go_gateUnlockRet = 0;
+// static int wc_go_gateLockRet = 0;
+// static int wc_go_gateLockCalls = 0;
+// static void wc_go_ForcePrivateKeyGate(int forced, int unlockRet, int lockRet) {
+//     wc_go_gateForced = forced;
+//     wc_go_gateUnlockRet = unlockRet;
+//     wc_go_gateLockRet = lockRet;
+//     wc_go_gateLockCalls = 0;
+// }
+// static int wc_go_PrivateKeyGateLockCalls(void) {
+//     return wc_go_gateLockCalls;
+// }
+// int wc_go_PrivateKeyUnlock(void) {
+//     if (wc_go_gateForced && wc_go_gateUnlockRet != 0)
+//         return wc_go_gateUnlockRet;
+// #if FIPS_VERSION_GE(5,1) && !defined(WOLFSSL_FIPS_DEV_NO_POST)
+//     return PRIVATE_KEY_UNLOCK();
+// #else
+//     return 0;
+// #endif
+// }
+// int wc_go_PrivateKeyLock(void) {
+//     int ret;
+// #if FIPS_VERSION_GE(5,1) && !defined(WOLFSSL_FIPS_DEV_NO_POST)
+//     ret = PRIVATE_KEY_LOCK();
+// #else
+//     ret = 0;
+// #endif
+//     if (wc_go_gateForced) {
+//         wc_go_gateLockCalls++;
+//         ret = wc_go_gateLockRet;
+//     }
+//     return ret;
+// }
 import "C"
 import "fmt"
 
@@ -74,6 +109,20 @@ func Wc_SetDefaultFips_Cb() {
 
 func Wc_SetDefaultSeed_Cb() int {
     return int(C.wc_SetSeed_Cb((C.wc_RngSeed_Cb)(C.wc_GenerateSeed)))
+}
+
+// forcePrivateKeyGate makes the unlocked helpers see fixed unlock/lock
+// results so their status propagation can be tested without a FIPS module.
+func forcePrivateKeyGate(forced bool, unlockRet, lockRet int) {
+    f := 0
+    if forced {
+        f = 1
+    }
+    C.wc_go_ForcePrivateKeyGate(C.int(f), C.int(unlockRet), C.int(lockRet))
+}
+
+func privateKeyGateLockCalls() int {
+    return int(C.wc_go_PrivateKeyGateLockCalls())
 }
 
 // FIPS private-key gate.
@@ -115,7 +164,9 @@ func init() {
         panic(fmt.Sprintf("wolfSSL: wolfCrypt_Init failed: %d", ret))
     }
     Wc_SetDefaultFips_Cb()
-    Wc_SetDefaultSeed_Cb()
+    if ret := Wc_SetDefaultSeed_Cb(); ret != 0 && ret != -174 {
+        panic(fmt.Sprintf("wolfSSL: wc_SetSeed_Cb failed: %d", ret))
+    }
 
     if ret := Wc_RunAllCast_fips(); ret != 0 && ret != -174 {
         panic(fmt.Sprintf("wolfSSL: wc_RunAllCast_fips failed: %d CAST(s) failed", ret))

@@ -163,6 +163,9 @@ jobs:
       - name: Run go vet (default config)
         run: go vet .
 
+      - name: Run root package tests (default config)
+        run: go test .
+
       - name: Run handles tests (default config)
         run: go test ./handles
 

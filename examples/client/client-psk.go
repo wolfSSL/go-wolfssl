@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client-psk.go
  *
  * Copyright (C) 2006-2023 wolfSSL Inc.
@@ -29,11 +32,16 @@ package main
 //        char* identity, unsigned int id_max_len, unsigned char* key,
 //        unsigned int key_max_len)
 //{
+//    static const char kIdentity[] = "Client_identity";
+//
 //    (void)ssl;
 //    (void)hint;
-//    (void)key_max_len;
 //
-//    strncpy(identity, "Client_identity", id_max_len);
+//    if (key_max_len < PSK_KEY_LEN || id_max_len < sizeof(kIdentity)) {
+//        return 0;
+//    }
+//
+//    memcpy(identity, kIdentity, sizeof(kIdentity));
 //
 //    key[0] = 26;
 //    key[1] = 43;
@@ -93,6 +101,11 @@ func main() {
 
     /* Retrieve file descriptor from net.*TCPConn type */
     file,err := conn.File()
+    if err != nil {
+        fmt.Println("Error getting file descriptor: ", err.Error())
+        os.Exit(1)
+    }
+    defer file.Close()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 
@@ -119,10 +132,10 @@ func main() {
     /* Recieve then print the message from server */
     buf := make([]byte, 256)
     ret = wolfSSL.WolfSSL_read(ssl, buf, 256)
-    if ret < 0 {
+    if ret <= 0 {
         fmt.Println(" wolfSSL_read failed ");
     } else {
-        fmt.Println("Server says : ", string(buf));
+        fmt.Println("Server says : ", string(buf[:ret]));
     }
 
     /* Shutdown wolfSSL */

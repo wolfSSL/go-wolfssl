@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client-dtls.go
  *
  * Copyright (C) 2006-2023 wolfSSL Inc.
@@ -32,12 +35,14 @@ import (
 const (
     CONN_HOST = "127.0.0.1"
     CONN_PORT = "11111"
+    /* Must match a SAN in ../certs/server-cert.pem */
+    SERVER_NAME = "example.com"
     CONN_TYPE = "udp4"
 )
 
 func main() {
-    /* Client Certificate path */
-    CERT_FILE := "../certs/ca-cert.pem"
+    /* CA certificate used to verify the server */
+    CA_CERT_FILE := "../certs/ca-cert.pem"
 
     /* Initialize wolfSSL */
     wolfSSL.WolfSSL_Init()
@@ -49,12 +54,15 @@ func main() {
         os.Exit(1)
     }
 
-    /* Load client certificate into WOLFSSL_CTX */
-    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CERT_FILE, nil)
+    /* Load trusted CA certificate for server verification */
+    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CA_CERT_FILE, nil)
     if ret != wolfSSL.WOLFSSL_SUCCESS {
-        fmt.Println("Failed to load ", CERT_FILE);
+        fmt.Println("Failed to load ", CA_CERT_FILE);
         os.Exit(1)
     }
+
+    /* OpenSSL-compatible builds default to no verification, so require it explicitly */
+    wolfSSL.WolfSSL_CTX_set_verify(ctx, wolfSSL.SSL_VERIFY_PEER)
 
     /* Create a WOLFSSL object */
     ssl := wolfSSL.WolfSSL_new(ctx)
@@ -63,15 +71,26 @@ func main() {
         os.Exit(1)
     }
 
-    /* Get address of TCP end point */
-    tcpAddr, err := net.ResolveUDPAddr(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
-    if err != nil {
-        println("ResolveTCPAddr failed:", err.Error())
+    /* Verify the server certificate is issued for SERVER_NAME, or for the name given as the first argument */
+    serverName := SERVER_NAME
+    if len(os.Args) > 1 {
+        serverName = os.Args[1]
+    }
+    ret = wolfSSL.WolfSSL_check_domain_name(ssl, serverName)
+    if ret != wolfSSL.WOLFSSL_SUCCESS {
+        fmt.Println(" wolfSSL_check_domain_name failed ", ret);
         os.Exit(1)
     }
 
-    /* Dial the recieved TCP address */
-    conn, err := net.DialUDP(CONN_TYPE, nil, tcpAddr)
+    /* Get address of UDP end point */
+    udpAddr, err := net.ResolveUDPAddr(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+    if err != nil {
+        println("ResolveUDPAddr failed:", err.Error())
+        os.Exit(1)
+    }
+
+    /* Dial the recieved UDP address */
+    conn, err := net.DialUDP(CONN_TYPE, nil, udpAddr)
     if err != nil {
         println("Dial failed:", err.Error())
         os.Exit(1)
@@ -87,8 +106,13 @@ func main() {
     addr := wolfSSL.WolfSSL_dtls_create_peer(port, CONN_HOST);
     wolfSSL.WolfSSL_dtls_set_peer(ssl, addr, 16)
 
-    /* Retrieve file descriptor from net.*TCPConn type */
+    /* Retrieve file descriptor from net.*UDPConn type */
     file,err := conn.File()
+    if err != nil {
+        fmt.Println("Error getting file descriptor: ", err.Error())
+        os.Exit(1)
+    }
+    defer file.Close()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 
@@ -115,10 +139,10 @@ func main() {
     /* Recieve then print the message from server */
     buf := make([]byte, 256)
     ret = wolfSSL.WolfSSL_read(ssl, buf, 256)
-    if ret < 0 {
+    if ret <= 0 {
         fmt.Println(" wolfSSL_read failed ");
     } else {
-        fmt.Println("Server says : ", string(buf));
+        fmt.Println("Server says : ", string(buf[:ret]));
     }
 
     /* Shutdown wolfSSL */

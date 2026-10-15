@@ -22,6 +22,10 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -e {0}
+
 jobs:
   discover:
     if: github.repository_owner == 'wolfssl'
@@ -31,14 +35,19 @@ jobs:
     name: Go ${{ matrix.go }} (wolfSSL ${{ needs.discover.outputs.latest_stable }})
     needs: discover
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # 1.21 is the oldest Go CI supports; the aliases follow new releases.
+        # 1.21 is the oldest Go CI supports; the aliases follow each CI image rebuild.
         go: [ '1.21', oldstable, stable ]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: wolfSSL configure flags
         id: flags

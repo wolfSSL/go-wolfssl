@@ -22,28 +22,29 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -e {0}
+
 env:
-  # staticcheck v0.8.1 reads export data only up to Go 1.26; bump both together.
+  # The CI image builds staticcheck with this Go; bump both together.
   ANALYSIS_GO: '1.26'
-  STATICCHECK_VERSION: v0.8.1
-  GOVULNCHECK_VERSION: v1.8.0
-  ACTIONLINT_VERSION: v1.7.12
 
 jobs:
   gofmt:
     name: gofmt (changed files)
     if: github.repository_owner == 'wolfssl' && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: stable
-          cache: false
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Check formatting of changed Go files
         env:
@@ -67,26 +68,25 @@ jobs:
     name: actionlint and nightly script syntax
     if: github.repository_owner == 'wolfssl'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: stable
-          cache: false
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: actionlint
-        run: |
-          go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
-          # SC2046 is pre-existing in the older build, lint and test-tls workflows.
-          "$(go env GOPATH)/bin/actionlint" -ignore SC2046
+        # SC2046 is pre-existing in the older build, lint and test-tls workflows.
+        run: actionlint -ignore SC2046
 
       - name: Check the nightly github-script parses
         run: |
           set -euo pipefail
           { echo '(async () => {'
-            yq '.jobs.nightly.steps[0].with.script' .github/workflows/nightly.yml
+            python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["jobs"]["nightly"]["steps"][0]["with"]["script"])' \
+              .github/workflows/nightly.yml
             echo '})();'; } > "$RUNNER_TEMP/nightly.js"
           node --check "$RUNNER_TEMP/nightly.js"
 
@@ -98,9 +98,14 @@ jobs:
     name: vet, staticcheck, govulncheck (wolfSSL ${{ needs.discover.outputs.latest_stable }})
     needs: discover
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: wolfSSL configure flags
         id: flags
@@ -115,12 +120,6 @@ jobs:
       - uses: ./.github/actions/setup-go-wolfssl
         with:
           go-version: ${{ env.ANALYSIS_GO }}
-
-      - name: Install analyzers
-        run: |
-          go install "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION"
-          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Analyze
         run: .github/scripts/analyze.sh /tmp/wolfssl-install

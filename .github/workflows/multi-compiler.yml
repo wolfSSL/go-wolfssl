@@ -22,6 +22,10 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -e {0}
+
 jobs:
   discover:
     if: github.repository_owner == 'wolfssl'
@@ -31,14 +35,19 @@ jobs:
     name: ${{ matrix.cc }} (wolfSSL ${{ needs.discover.outputs.latest_stable }})
     needs: discover
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Compilers preinstalled on the ubuntu-24.04 runner image.
+        # Compilers baked into the go-wolfssl-ci image.
         cc: [ gcc-12, gcc-13, gcc-14, clang-16, clang-17, clang-18 ]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: wolfSSL configure flags
         id: flags

@@ -26,6 +26,10 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -e {0}
+
 jobs:
   discover:
     if: github.repository_owner == 'wolfssl'
@@ -35,6 +39,10 @@ jobs:
     name: ${{ matrix.sanitizer }} (wolfSSL ${{ matrix.wolfssl-ref }})
     needs: discover
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
+      # The sanitizer runtimes need the kernel ASLR workaround below.
+      options: --privileged
     timeout-minutes: 45
     # MSan needs every C dependency instrumented and is still being triaged.
     continue-on-error: ${{ matrix.sanitizer == 'msan' }}
@@ -45,6 +53,9 @@ jobs:
         wolfssl-ref: ${{ fromJson(inputs.nightly && needs.discover.outputs.refs || format('["{0}"]', needs.discover.outputs.latest_stable)) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Sanitizer flags
         id: san
@@ -76,7 +87,7 @@ jobs:
           esac
 
       - name: Work around high-entropy ASLR for sanitizers
-        run: sudo sysctl vm.mmap_rnd_bits=28
+        run: sysctl -w vm.mmap_rnd_bits=28
 
       - uses: ./.github/actions/setup-wolfssl
         with:

@@ -1,28 +1,31 @@
 name: Setup Go for go-wolfssl
 description: >-
-  Install Go, keep it from switching toolchains, and fetch the one module
-  dependency (golang.org/x/term, used by the aes-encrypt example) at a version
-  that still supports the oldest Go in CI.
+  Select a Go toolchain baked into the go-wolfssl-ci image, keep it from
+  switching toolchains, and add the one module dependency (golang.org/x/term,
+  used by the aes-encrypt example) at a version that still supports the
+  oldest Go in CI. The image's module cache already holds it.
 
 inputs:
   go-version:
-    description: Go version or setup-go alias (stable, oldstable).
+    description: A Go minor baked into the image (1.21, 1.26), or stable or oldstable.
     required: false
     default: stable
 
 runs:
   using: composite
   steps:
-    - name: Setup Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-      with:
-        go-version: ${{ inputs.go-version }}
-        cache: false
-
-    - name: Configure the Go environment
+    - name: Select Go ${{ inputs.go-version }}
       shell: bash
+      env:
+        GO_VERSION: ${{ inputs.go-version }}
       run: |
         set -euo pipefail
+        goroot="/opt/go/$GO_VERSION"
+        if [ ! -x "$goroot/bin/go" ]; then
+          echo "::error::Go $GO_VERSION is not in the CI image; have: $(ls /opt/go | tr '\n' ' ')"
+          exit 1
+        fi
+        echo "$goroot/bin" >> "$GITHUB_PATH"
         echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
-        GOTOOLCHAIN=local go get golang.org/x/term@v0.25.0
-        go version
+        "$goroot/bin/go" get golang.org/x/term@v0.25.0
+        "$goroot/bin/go" version

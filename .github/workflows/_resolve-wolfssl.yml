@@ -13,10 +13,16 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -e {0}
+
 jobs:
   resolve:
     name: Resolve wolfSSL versions
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
     timeout-minutes: 5
     outputs:
       refs: ${{ steps.resolve.outputs.refs }}

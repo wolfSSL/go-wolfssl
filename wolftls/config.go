@@ -20,6 +20,52 @@
 
 package wolftls
 
+// #include <stdlib.h>
+// #include <wolfssl/options.h>
+// #include <wolfssl/ssl.h>
+//
+// /* Before 5.9.2 an IP check also fell back to the subject CN. */
+// static int wolftls_check_ip_address(WOLFSSL* ssl, const char* ip) {
+// #if !defined(WOLFSSL_IP_ALT_NAME)
+//     (void)ssl; (void)ip;
+//     return -2;
+// #elif LIBWOLFSSL_VERSION_HEX >= 0x05009002 || \
+//     (LIBWOLFSSL_VERSION_HEX >= 0x05009001 && \
+//      defined(WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY))
+//     return wolfSSL_check_ip_address(ssl, ip);
+// #elif defined(OPENSSL_EXTRA) && defined(WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY)
+//     return wolfSSL_X509_VERIFY_PARAM_set1_ip_asc(wolfSSL_get0_param(ssl), ip);
+// #else
+//     (void)ssl; (void)ip;
+//     return -1;
+// #endif
+// }
+//
+// static int wolftls_set_default_min_version(WOLFSSL_CTX* ctx) {
+// #ifdef WOLFSSL_SYS_CRYPTO_POLICY
+//     if (wolfSSL_crypto_policy_is_enabled())
+//         return WOLFSSL_SUCCESS;
+// #endif
+// #if !defined(WOLFSSL_NO_TLS12)
+//     return wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_2);
+// #elif defined(WOLFSSL_TLS13)
+//     return wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_3);
+// #else
+//     (void)ctx;
+//     return WOLFSSL_FAILURE;
+// #endif
+// }
+import "C"
+
+import (
+	"fmt"
+	"net"
+	"strings"
+	"unsafe"
+
+	wolfSSL "github.com/wolfssl/go-wolfssl"
+)
+
 // TLS version constants, matching crypto/tls values.
 const (
 	VersionTLS10 = 0x0301
@@ -63,7 +109,8 @@ type Certificate struct {
 	// KeyPEM is the PEM-encoded private key.
 	KeyPEM []byte
 
-	// CertDER is the DER-encoded certificate (alternative to PEM).
+	// CertDER is the DER-encoded certificate chain (alternative to PEM):
+	// CertDER[0] is the leaf, followed by intermediates in sending order.
 	CertDER [][]byte
 
 	// KeyDER is the DER-encoded private key (alternative to PEM).
@@ -73,7 +120,9 @@ type Certificate struct {
 // Config structures a TLS connection's parameters.
 type Config struct {
 	// ServerName is the value sent in the SNI extension and, for clients, is
-	// used for hostname verification. A client that verifies the peer
+	// used for hostname verification. An IP literal (optionally bracketed,
+	// IPv6 may carry a zone) is not sent in SNI and is verified against the
+	// certificate's IP SANs instead. A client that verifies the peer
 	// (InsecureSkipVerify == false) must set ServerName: otherwise the
 	// certificate name is never checked, so doHandshake rejects the connection
 	// before the handshake, matching crypto/tls. Set InsecureSkipVerify to
@@ -106,16 +155,21 @@ type Config struct {
 	Certificates []Certificate
 
 	// GetCertificate returns a certificate based on the ClientHello. It is
-	// called on the server side when an SNI extension is received. If set
-	// and the callback returns a certificate, it overrides Certificates.
+	// called on every server handshake (wolfSSL must be built with
+	// WOLFSSL_CERT_SETUP_CB); ServerName is empty when the client sent no
+	// SNI. A returned certificate overrides Certificates. Returning nil, nil
+	// falls back to Certificates[0], or fails the handshake when Certificates
+	// is empty. A returned error aborts the handshake.
 	GetCertificate func(*ClientHelloInfo) (*Certificate, error)
 
 	// NextProtos is a list of supported application-level protocols for ALPN
-	// negotiation, in order of preference.
+	// negotiation, in order of preference. Each entry must be 1-255 bytes
+	// and must not contain ',' or NUL, or the handshake is rejected.
 	NextProtos []string
 
 	// MinVersion is the minimum TLS version to accept.
-	// Zero means no minimum (wolfSSL default, typically TLS 1.2).
+	// Zero means TLS 1.2, matching crypto/tls, unless a system crypto
+	// policy owns the floor.
 	MinVersion uint16
 
 	// MaxVersion is the maximum TLS version to accept.
@@ -133,19 +187,18 @@ type Config struct {
 	VerifyPeerCertificate func(rawCerts [][]byte) error
 
 	// CipherSuites is the list of enabled cipher suites. If nil, a default
-	// list is used. Each element is a wolfSSL cipher suite name string.
+	// list is used. Each element is a wolfSSL cipher suite name string; an
+	// empty element or one containing NUL rejects the handshake.
 	CipherSuites []string
 
 	// ClientAuth controls how the server handles client certificates.
 	// Ignored on the client side. NoClientCert (the zero value) requests
 	// no client certificate at all, and one sent anyway is not verified.
-	// When set to RequireAnyClientCert or
-	// RequireAndVerifyClientCert, the server will fail the handshake if
-	// the client does not present a certificate. When set to
-	// VerifyClientCertIfGiven or RequireAndVerifyClientCert, wolfSSL
-	// verifies the presented client cert against the pool loaded via
-	// RootCAPEMs (wolfSSL uses the same verify store for peer certs
-	// regardless of client/server role).
+	// Every other value requests a certificate and, unlike crypto/tls,
+	// verifies any certificate the client presents against RootCAPEMs, so
+	// RequestClientCert behaves as VerifyClientCertIfGiven and
+	// RequireAnyClientCert as RequireAndVerifyClientCert. The two Require
+	// values also fail the handshake when the client sends no certificate.
 	ClientAuth ClientAuthType
 }
 
@@ -179,6 +232,98 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &clone
+}
+
+// setDefaultMinVersion sets the TLS 1.2 floor used when MinVersion is zero.
+// It uses the native setter, which builds without OPENSSL_EXTRA also have.
+func setDefaultMinVersion(ctx *wolfSSL.WOLFSSL_CTX) int {
+	return int(C.wolftls_set_default_min_version((*C.WOLFSSL_CTX)(unsafe.Pointer(ctx))))
+}
+
+// serverNameIP returns the address when ServerName is an IP literal
+// (optionally bracketed, IPv6 may carry a zone), or nil for a host name.
+func serverNameIP(name string) net.IP {
+	if len(name) >= 2 && name[0] == '[' && name[len(name)-1] == ']' {
+		name = name[1 : len(name)-1]
+	}
+	zone := ""
+	if i := strings.IndexByte(name, '%'); i >= 0 {
+		name, zone = name[:i], name[i+1:]
+		if zone == "" {
+			return nil
+		}
+	}
+	ip := net.ParseIP(name)
+	if ip == nil || (zone != "" && strings.IndexByte(name, ':') < 0) {
+		return nil
+	}
+	return ip
+}
+
+// ipCheckUnavailable is returned by sslCheckIPAddress when the wolfSSL build
+// has no IP check that ignores the subject CN.
+const ipCheckUnavailable = -1
+
+// ipAltNameMissing is returned by sslCheckIPAddress when wolfSSL does not
+// decode IP SANs (built without WOLFSSL_IP_ALT_NAME).
+const ipAltNameMissing = -2
+
+// sslCheckIPAddress makes wolfSSL match the peer leaf's IP SANs against ip.
+// wolfSSL renders IPv6 SANs as eight uppercase four-digit groups.
+func sslCheckIPAddress(ssl *wolfSSL.WOLFSSL, ip net.IP) int {
+	asc := ip.String()
+	if v4 := ip.To4(); v4 == nil {
+		var b strings.Builder
+		for i := 0; i < net.IPv6len; i += 2 {
+			if i > 0 {
+				b.WriteByte(':')
+			}
+			fmt.Fprintf(&b, "%02X%02X", ip[i], ip[i+1])
+		}
+		asc = b.String()
+	}
+	cs := C.CString(asc)
+	defer C.free(unsafe.Pointer(cs))
+	return int(C.wolftls_check_ip_address((*C.WOLFSSL)(unsafe.Pointer(ssl)), cs))
+}
+
+// checkNextProtos rejects ALPN names that cannot be passed through
+// wolfSSL_UseALPN's comma-separated C string unchanged.
+func checkNextProtos(protos []string) error {
+	for _, p := range protos {
+		if len(p) == 0 || len(p) > 255 {
+			return fmt.Errorf("wolftls: invalid NextProtos entry length %d", len(p))
+		}
+		if strings.ContainsAny(p, ",\x00") {
+			return fmt.Errorf("wolftls: NextProtos entry %q contains ',' or NUL", p)
+		}
+	}
+	return nil
+}
+
+// checkCipherSuites rejects entries a C string would truncate or that are
+// empty; ':' is kept so pre-joined wolfSSL cipher lists still work.
+func checkCipherSuites(suites []string) error {
+	for _, cs := range suites {
+		if cs == "" || strings.IndexByte(cs, 0) >= 0 {
+			return fmt.Errorf("wolftls: invalid CipherSuites entry %q", cs)
+		}
+	}
+	return nil
+}
+
+// derChain concatenates CertDER in order so the leaf and its intermediates
+// load through wolfSSL's chain API. It returns nil, which wolfSSL rejects,
+// when any entry is empty, so a later certificate never becomes the leaf.
+func (cert *Certificate) derChain() []byte {
+	var out []byte
+	for _, der := range cert.CertDER {
+		if len(der) == 0 {
+			return nil
+		}
+		out = append(out, der...)
+	}
+	return out
 }
 
 func (cert Certificate) clone() Certificate {

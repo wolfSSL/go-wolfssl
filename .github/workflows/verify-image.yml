@@ -1,0 +1,27 @@
+name: Verify CI image
+
+on:
+  push:
+    branches: [ci/ghcr-ci-image]
+
+permissions:
+  contents: read
+
+jobs:
+  config-matrix:
+    uses: ./.github/workflows/config-matrix.yml
+  go-versions:
+    uses: ./.github/workflows/go-versions.yml
+  static-analysis:
+    uses: ./.github/workflows/static-analysis.yml
+  multi-compiler:
+    uses: ./.github/workflows/multi-compiler.yml
+  sanitizer:
+    uses: ./.github/workflows/sanitizer.yml
+  interop:
+    uses: ./.github/workflows/interop.yml
+  codeql:
+    uses: ./.github/workflows/codeql.yml
+    permissions:
+      contents: read
+      security-events: write

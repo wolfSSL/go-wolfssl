@@ -3,6 +3,7 @@ run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || g
 
 # START OF COMMON SECTION
 on:
+  workflow_call:
   push:
     branches: [ 'master', 'main', 'release/**' ]
   pull_request:

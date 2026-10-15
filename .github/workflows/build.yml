@@ -174,7 +174,7 @@ jobs:
       - name: Build against reduced wolfSSL configs
         run: |
           set -e
-          has() { grep -q "^#define $2\$" /tmp/wolfssl-install-$1/include/wolfssl/options.h; }
+          has() { grep -q "^#define $2\$" "/tmp/wolfssl-install-$1/include/wolfssl/options.h"; }
           for m in NO_AES WOLFSSL_ALT_NAMES; do has reduced1 $m; done
           if has reduced1 HAVE_SNI; then echo "reduced1 has HAVE_SNI"; exit 1; fi
           for m in NO_SHA256 NO_RSA NO_PKCS8 WOLFSSL_NO_PEM; do has reduced2 $m; done

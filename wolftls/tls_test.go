@@ -805,7 +805,6 @@ func TestGetCertificate(t *testing.T) {
 
 	callbackCalled := false
 	serverConfig := &Config{
-		// No static Certificates — rely on GetCertificate
 		GetCertificate: func(hello *ClientHelloInfo) (*Certificate, error) {
 			callbackCalled = true
 			t.Logf("GetCertificate called for SNI: %q", hello.ServerName)

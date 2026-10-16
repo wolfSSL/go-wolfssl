@@ -1,0 +1,6 @@
+# Only send the image assets to Docker.
+**
+!.github/
+!.github/docker/
+!.github/docker/go-wolfssl-ci/
+!.github/docker/go-wolfssl-ci/**

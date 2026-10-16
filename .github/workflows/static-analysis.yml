@@ -1,0 +1,125 @@
+name: Static Analysis
+run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+    inputs:
+      nightly_id:
+        description: Set by the nightly dispatcher to identify its runs
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -e {0}
+
+env:
+  # The CI image builds staticcheck with this Go; bump both together.
+  ANALYSIS_GO: '1.26'
+
+jobs:
+  gofmt:
+    name: gofmt (changed files)
+    if: github.repository_owner == 'wolfssl' && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check formatting of changed Go files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.go')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Go files changed."
+            exit 0
+          fi
+          bad=$(gofmt -l "${files[@]}")
+          if [ -n "$bad" ]; then
+            echo "::error::These changed files need gofmt:"
+            echo "$bad"
+            gofmt -d "${files[@]}"
+            exit 1
+          fi
+
+  workflows:
+    name: actionlint and nightly script syntax
+    if: github.repository_owner == 'wolfssl'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: actionlint
+        # SC2046 is pre-existing in the older build, lint and test-tls workflows.
+        run: actionlint -ignore SC2046
+
+      - name: Check the nightly github-script parses
+        run: |
+          set -euo pipefail
+          { echo '(async () => {'
+            python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["jobs"]["nightly"]["steps"][0]["with"]["script"])' \
+              .github/workflows/nightly.yml
+            echo '})();'; } > "$RUNNER_TEMP/nightly.js"
+          node --check "$RUNNER_TEMP/nightly.js"
+
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  analyze:
+    name: vet, staticcheck, govulncheck (wolfSSL ${{ needs.discover.outputs.latest_stable }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: wolfSSL configure flags
+        id: flags
+        run: echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ needs.discover.outputs.latest_stable }}
+          configure-flags: ${{ steps.flags.outputs.flags }}
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+        with:
+          go-version: ${{ env.ANALYSIS_GO }}
+
+      - name: Analyze
+        run: .github/scripts/analyze.sh /tmp/wolfssl-install

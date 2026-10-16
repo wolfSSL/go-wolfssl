@@ -196,15 +196,15 @@ func (c *Conn) doHandshake() error {
 	// rejected version (wolfSSL built without that version's support)
 	// fails loudly instead of silently degrading policy.
 	if c.config.MinVersion != 0 {
-		if ret := wolfSSL.WolfSSL_CTX_set_min_proto_version(c.ctx, int(c.config.MinVersion)); ret != wolfSSL.WOLFSSL_SUCCESS {
+		if err := ctxSetMinVersion(c.ctx, c.config.MinVersion); err != nil {
 			c.freeCtxLocked()
-			return fmt.Errorf("wolftls: set_min_proto_version(0x%x) rejected: %d", c.config.MinVersion, ret)
+			return err
 		}
 	}
 	if c.config.MaxVersion != 0 {
-		if ret := wolfSSL.WolfSSL_CTX_set_max_proto_version(c.ctx, int(c.config.MaxVersion)); ret != wolfSSL.WOLFSSL_SUCCESS {
+		if err := ctxSetMaxVersion(c.ctx, c.config.MaxVersion); err != nil {
 			c.freeCtxLocked()
-			return fmt.Errorf("wolftls: set_max_proto_version(0x%x) rejected: %d", c.config.MaxVersion, ret)
+			return err
 		}
 	}
 
@@ -344,7 +344,10 @@ func (c *Conn) doHandshake() error {
 			}
 			return 1 // success per CertSetupCb contract
 		})
-		ctxSetCertSetupCallback(c.ctx, c.certCbID)
+		if err := ctxSetCertSetupCallback(c.ctx, c.certCbID); err != nil {
+			c.freeCtxLocked()
+			return err
+		}
 	}
 
 	// Set cipher suites

@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -30,9 +31,9 @@ import (
 	"github.com/wolfssl/go-wolfssl/handles"
 )
 
-// ErrUnsupportedCreateMode indicates the current wolfx509 build doesn't
-// yet handle the requested CreateCertificate shape (CA-signed, non-ECC
-// key, etc.).
+// ErrUnsupportedCreateMode is returned by CreateCertificateRequest when the
+// template asks for a signature algorithm this build cannot produce, and by
+// CreateCertificate when wolfSSL cannot encode a requested key usage.
 var ErrUnsupportedCreateMode = errors.New("wolfx509: unsupported CreateCertificate mode")
 
 // KeyHandle is a wolfCrypt key + RNG suitable for cert/CSR signing or for
@@ -60,6 +61,17 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 	if pubKey == nil || signer == nil {
 		return nil, errors.New("wolfx509: nil key")
 	}
+	if template.KeyUsage&KeyUsageDecipherOnly != 0 && template.KeyUsage&KeyUsageKeyAgreement == 0 {
+		return nil, errors.New("wolfx509: KeyUsageDecipherOnly requires KeyUsageKeyAgreement")
+	}
+	if len(template.UnknownExtKeyUsage) > 0 {
+		return nil, fmt.Errorf("%w: UnknownExtKeyUsage cannot be encoded", ErrUnsupportedCreateMode)
+	}
+	for _, u := range template.ExtKeyUsage {
+		if !extKeyUsageEncodable(u) {
+			return nil, fmt.Errorf("%w: ExtKeyUsage %d cannot be encoded", ErrUnsupportedCreateMode, int(u))
+		}
+	}
 
 	notBefore, notAfter, err := resolveValidity(template.NotBefore,
 		template.NotAfter, template.ValidDays)
@@ -69,31 +81,56 @@ func CreateCertificate(template, parent *Certificate, pubKey, signer KeyHandle) 
 
 	var serial []byte
 	if template.SerialNumber != nil {
+		if template.SerialNumber.Sign() <= 0 {
+			return nil, errors.New("wolfx509: SerialNumber must be positive")
+		}
 		serial = template.SerialNumber.Bytes()
 	}
 
 	opts := certBuildOpts{
-		SubjectCN:   template.Subject.CommonName,
-		Serial:      serial,
-		NotBefore:   notBefore,
-		NotAfter:    notAfter,
-		IsCA:        template.IsCA,
-		KeyUsage:    translateKeyUsage(template.KeyUsage),
-		ExtKeyUsage: translateExtKeyUsage(template.ExtKeyUsage),
-		DNSNames:    template.DNSNames,
-		IPAddresses: template.IPAddresses,
-		AcmeKeyAuth: template.AcmeKeyAuth,
+		SubjectCN:             template.Subject.CommonName,
+		Serial:                serial,
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		IsCA:                  template.IsCA,
+		KeyUsage:              translateKeyUsage(template.KeyUsage),
+		ExtKeyUsage:           translateExtKeyUsage(template.ExtKeyUsage),
+		DNSNames:              template.DNSNames,
+		EmailAddresses:        template.EmailAddresses,
+		IPAddresses:           template.IPAddresses,
+		AcmeKeyAuth:           template.AcmeKeyAuth,
 		BasicConstraintsValid: template.BasicConstraintsValid,
 	}
 
+	var der []byte
 	if template == parent && pubKey == signer {
-		return makeAndSignSelfSignedCert(opts, signer)
-	}
-	// CA-signed: need parent.Raw to extract the issuer DN.
-	if len(parent.Raw) == 0 {
+		der, err = makeAndSignSelfSignedCert(opts, signer)
+	} else if len(parent.Raw) == 0 {
+		// CA-signed: need parent.Raw to extract the issuer DN.
 		return nil, errors.New("wolfx509: parent.Raw is empty; CA cert must be parsed via ParseCertificate first")
+	} else {
+		der, err = makeAndSignCASignedCert(opts, parent.Raw, pubKey, signer)
 	}
-	return makeAndSignCASignedCert(opts, parent.Raw, pubKey, signer)
+	if err == nil && template.KeyUsage&KeyUsageDecipherOnly != 0 {
+		if err = checkEncodedKeyUsage(der, template.KeyUsage); err != nil {
+			return nil, err
+		}
+	}
+	return der, err
+}
+
+// checkEncodedKeyUsage rejects DER whose keyUsage differs from want. Older
+// wolfSSL mis-encodes the 9th (decipherOnly) bit as an invalid BIT STRING or
+// as digitalSignature.
+func checkEncodedKeyUsage(der []byte, want KeyUsage) error {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("%w: wolfSSL cannot encode decipherOnly: %v", ErrUnsupportedCreateMode, err)
+	}
+	if KeyUsage(cert.KeyUsage) != want {
+		return fmt.Errorf("%w: wolfSSL encoded key usage %#x, want %#x", ErrUnsupportedCreateMode, int(cert.KeyUsage), int(want))
+	}
+	return nil
 }
 
 // CertificateRequest is the template for CreateCertificateRequest. Mirrors
@@ -138,9 +175,10 @@ func CreateCertificateRequest(template *CertificateRequest, key KeyHandle) ([]by
 		return nil, fmt.Errorf("%w: only ECDSAWithSHA256 is supported", ErrUnsupportedCreateMode)
 	}
 	return makeAndSignCSR(certBuildOpts{
-		SubjectCN:   template.Subject.CommonName,
-		DNSNames:    template.DNSNames,
-		IPAddresses: template.IPAddresses,
+		SubjectCN:      template.Subject.CommonName,
+		DNSNames:       template.DNSNames,
+		EmailAddresses: template.EmailAddresses,
+		IPAddresses:    template.IPAddresses,
 	}, key)
 }
 
@@ -153,6 +191,10 @@ const clockSkewBackdate = 24 * time.Hour
 const (
 	minASN1Year = 1
 	maxASN1Year = 9999
+
+	// maxValidDays bounds ValidDays so date arithmetic cannot overflow; the
+	// year check below still rejects anything past maxASN1Year.
+	maxValidDays = (maxASN1Year + 1) * 366
 )
 
 // resolveValidity determines the appropriate notBefore and notAfter time values
@@ -178,6 +220,9 @@ func resolveValidity(notBefore, notAfter time.Time, validDays int) (time.Time, t
 	if notAfter.IsZero() && !notBefore.IsZero() {
 		return time.Time{}, time.Time{}, errors.New("wolfx509: NotBefore requires NotAfter; ValidDays is measured from issuance, not from NotBefore")
 	}
+	if validDays > maxValidDays {
+		return time.Time{}, time.Time{}, fmt.Errorf("wolfx509: ValidDays (%d) exceeds the encodable range", validDays)
+	}
 
 	now := time.Now()
 	nb, na := notBefore, notAfter
@@ -185,7 +230,7 @@ func resolveValidity(notBefore, notAfter time.Time, validDays int) (time.Time, t
 		nb = now.Add(-clockSkewBackdate)
 	}
 	if na.IsZero() {
-		na = now.Add(time.Duration(validDays) * 24 * time.Hour)
+		na = now.UTC().AddDate(0, 0, validDays)
 	}
 
 	base := notBefore
@@ -256,7 +301,21 @@ func translateKeyUsage(k KeyUsage) int {
 	if k&KeyUsageEncipherOnly != 0 {
 		out |= wcKeyUsageEncipherOnly
 	}
+	if k&KeyUsageDecipherOnly != 0 {
+		out |= wcKeyUsageDecipherOnly
+	}
 	return out
+}
+
+// extKeyUsageEncodable reports whether translateExtKeyUsage can encode u.
+func extKeyUsageEncodable(u ExtKeyUsage) bool {
+	switch u {
+	case ExtKeyUsageAny, ExtKeyUsageServerAuth, ExtKeyUsageClientAuth,
+		ExtKeyUsageCodeSigning, ExtKeyUsageEmailProtection,
+		ExtKeyUsageTimeStamping, ExtKeyUsageOCSPSigning:
+		return true
+	}
+	return false
 }
 
 // translateExtKeyUsage folds a slice of crypto/x509-shaped ExtKeyUsage

@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* extractKey.go
  *
  * Copyright (C) 2006-2025 wolfSSL Inc.
@@ -42,6 +45,7 @@ func loadX509(certData []byte) *wolfSSL.WOLFSSL_X509 {
 
 func main() {
 	wolfSSL.WolfSSL_Init()
+	defer wolfSSL.WolfSSL_Cleanup()
 
 	leafPath := "../certs/server-ecc.pem"
 
@@ -58,6 +62,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error converting one or more certificates to wolfSSL X509")
 		os.Exit(1)
 	}
+	defer wolfSSL.WolfSSL_X509_free(x509Leaf)
 
 	// First call to get required buffer size
 	var pubLen int
@@ -79,8 +84,11 @@ func main() {
 	fmt.Printf("%x\n", pubBuf)
 
 	digest := make([]byte, wolfSSL.WC_SHA384_DIGEST_SIZE )
-        wolfSSL.Wc_Sha384Hash(pubBuf, pubLen, digest)
-	fmt.Printf("SHA484 hash of public key DER\n")
+	if ret = wolfSSL.Wc_Sha384Hash(pubBuf, pubLen, digest); ret != 0 {
+		fmt.Fprintln(os.Stderr, "Failed to hash public key DER:", ret)
+		os.Exit(1)
+	}
+	fmt.Printf("SHA384 hash of public key DER\n")
 	fmt.Printf("%x\n", digest)
 
 	var pubKey wolfSSL.Ecc_key
@@ -99,7 +107,5 @@ func main() {
 	fmt.Println("Successfully imported ECC public key structure from DER buffer")
         
 	wolfSSL.Wc_ecc_free(&pubKey)
-
-	wolfSSL.WolfSSL_Cleanup()
 }
 

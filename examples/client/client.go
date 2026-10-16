@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* client.go
  *
  * Copyright (C) 2006-2022 wolfSSL Inc.
@@ -31,12 +34,14 @@ import (
 const (
     CONN_HOST = "localhost"
     CONN_PORT = "11111"
+    /* Must match a SAN in ../certs/server-cert.pem */
+    SERVER_NAME = "example.com"
     CONN_TYPE = "tcp"
 )
 
 func main() {
-    /* Client Certificate path */
-    CERT_FILE := "../certs/ca-cert.pem"
+    /* CA certificate used to verify the server */
+    CA_CERT_FILE := "../certs/ca-cert.pem"
 
     /* Initialize wolfSSL */
     wolfSSL.WolfSSL_Init()
@@ -48,17 +53,31 @@ func main() {
         os.Exit(1)
     }
 
-    /* Load client certificate into WOLFSSL_CTX */
-    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CERT_FILE, nil)
+    /* Load trusted CA certificate for server verification */
+    ret := wolfSSL.WolfSSL_CTX_load_verify_locations(ctx, CA_CERT_FILE, nil)
     if ret != wolfSSL.WOLFSSL_SUCCESS {
-        fmt.Println("Failed to load ", CERT_FILE);
+        fmt.Println("Failed to load ", CA_CERT_FILE);
         os.Exit(1)
     }
+
+    /* OpenSSL-compatible builds default to no verification, so require it explicitly */
+    wolfSSL.WolfSSL_CTX_set_verify(ctx, wolfSSL.SSL_VERIFY_PEER)
 
     /* Create a WOLFSSL object */
     ssl := wolfSSL.WolfSSL_new(ctx)
     if ssl == nil {
         fmt.Println(" wolfSSL_new failed");
+        os.Exit(1)
+    }
+
+    /* Verify the server certificate is issued for SERVER_NAME, or for the name given as the first argument */
+    serverName := SERVER_NAME
+    if len(os.Args) > 1 {
+        serverName = os.Args[1]
+    }
+    ret = wolfSSL.WolfSSL_check_domain_name(ssl, serverName)
+    if ret != wolfSSL.WOLFSSL_SUCCESS {
+        fmt.Println(" wolfSSL_check_domain_name failed ", ret);
         os.Exit(1)
     }
 
@@ -78,6 +97,11 @@ func main() {
 
     /* Retrieve file descriptor from net.*TCPConn type */
     file,err := conn.File()
+    if err != nil {
+        fmt.Println("Error getting file descriptor: ", err.Error())
+        os.Exit(1)
+    }
+    defer file.Close()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 
@@ -104,10 +128,10 @@ func main() {
     /* Recieve then print the message from server */
     buf := make([]byte, 256)
     ret = wolfSSL.WolfSSL_read(ssl, buf, 256)
-    if ret < 0 {
+    if ret <= 0 {
         fmt.Println(" wolfSSL_read failed ");
     } else {
-        fmt.Println("Server says : ", string(buf));
+        fmt.Println("Server says : ", string(buf[:ret]));
     }
 
     /* Shutdown wolfSSL */

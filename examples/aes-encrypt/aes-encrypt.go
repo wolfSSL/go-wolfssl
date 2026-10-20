@@ -21,7 +21,8 @@
 package main
 
 import (
-    "crypto/subtle"
+    "bytes"
+    "errors"
     "fmt"
     "os"
     "strconv"
@@ -29,7 +30,13 @@ import (
     "golang.org/x/term"
 )
 
+/* File format: magic | salt | nonce | ciphertext | tag. The header is authenticated as AAD. */
+const MAGIC = "wGCM"
+const MAGIC_SIZE = len(MAGIC)
 const SALT_SIZE = 8
+const NONCE_SIZE = wolfSSL.GCM_NONCE_MID_SZ
+const TAG_SIZE = wolfSSL.AES_BLOCK_SIZE
+const HEADER_SIZE = MAGIC_SIZE + SALT_SIZE + NONCE_SIZE
 
 func sizeCheck(size *int) {
     if *size == 128 {
@@ -60,87 +67,99 @@ func getPass() []byte {
     return pass
 }
 
-func AesEncrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
+func sealData(aes *wolfSSL.Aes, password []byte, plaintext []byte, size int) ([]byte, error) {
     var rng    wolfSSL.WC_RNG
-    var input  []byte
-    var output []byte
-    var iv     []byte = make([]byte, wolfSSL.AES_BLOCK_SIZE)
-    var salt   []byte = make([]byte, SALT_SIZE)
+    var header []byte = make([]byte, HEADER_SIZE)
+    var tag    []byte = make([]byte, TAG_SIZE)
 
-    var length      int
-    var inputLength int
-    var padCounter  int = 0
-    var i           int
+    copy(header, MAGIC)
+    salt  := header[MAGIC_SIZE:MAGIC_SIZE+SALT_SIZE]
+    nonce := header[MAGIC_SIZE+SALT_SIZE:]
 
-    key := getPass()
-
-    readIn, err := os.ReadFile(inFile)
-    if err != nil {
-        println(err.Error())
-        os.Exit(1)
-    }
-
-    inputLength = len(readIn)
-    length = inputLength
-    i = inputLength
-
-    for length % wolfSSL.AES_BLOCK_SIZE != 0 {
-        length++
-        padCounter++
-    }
-
-    input  = make([]byte, length)
-    output = make([]byte, length)
-    copy(input[0:length-padCounter], readIn[:])
-
-    for i < length {
-        input[i] = byte(padCounter)
-        i++
-    }
+    output := make([]byte, len(plaintext))
 
     ret := wolfSSL.Wc_InitRng(&rng)
     if ret != 0 {
-        fmt.Println("Failed to initialize RNG")
-        os.Exit(1)
-    }
-
-    ret = wolfSSL.Wc_RNG_GenerateBlock(&rng, iv, wolfSSL.AES_BLOCK_SIZE)
-    if ret != 0 {
-        fmt.Println("Failed to generate RNG block")
-        os.Exit(1)
+        return nil, errors.New("Failed to initialize RNG")
     }
 
     ret = wolfSSL.Wc_RNG_GenerateBlock(&rng, salt, SALT_SIZE)
-    if ret != 0 {
-        fmt.Println("Failed to generate RNG block")
-        os.Exit(1)
+    if ret == 0 {
+        ret = wolfSSL.Wc_RNG_GenerateBlock(&rng, nonce, NONCE_SIZE)
     }
-
-    if padCounter == 0 {
-        salt[0] = 0
-    } else if salt[0] == 0 {
-        salt[0] = 1
+    freeRet := wolfSSL.Wc_FreeRng(&rng)
+    if ret != 0 {
+        return nil, errors.New("Failed to generate RNG block")
+    }
+    if freeRet != 0 {
+        return nil, errors.New("Failed to free RNG")
     }
 
     derivedKey := make([]byte, size)
-    ret = wolfSSL.Wc_PBKDF2(derivedKey, key, len(key), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
+    ret = wolfSSL.Wc_PBKDF2(derivedKey, password, len(password), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
     if ret != 0 {
-        fmt.Println("Failed to stretch key")
-        os.Exit(1)
+        return nil, errors.New("Failed to stretch key")
     }
 
-    ret = wolfSSL.Wc_AesSetKey(aes, derivedKey, size, iv, wolfSSL.AES_ENCRYPTION)
+    ret = wolfSSL.Wc_AesGcmSetKey(aes, derivedKey, size)
     if ret != 0 {
-        fmt.Println("Failed to set AES key", ret)
-        os.Exit(1)
+        return nil, fmt.Errorf("Failed to set AES key %d", ret)
     }
 
-    ret = wolfSSL.Wc_AesCbcEncrypt(aes, output, input, length)
+    ret = wolfSSL.Wc_AesGcmEncrypt(aes, output, plaintext, nonce, tag, header)
     if ret != 0 {
-        fmt.Println("Failed AES encrypt")
-        os.Exit(1)
+        return nil, fmt.Errorf("Failed AES encrypt %d", ret)
     }
 
+    sealed := make([]byte, 0, HEADER_SIZE + len(output) + TAG_SIZE)
+    sealed = append(sealed, header...)
+    sealed = append(sealed, output...)
+    sealed = append(sealed, tag...)
+    return sealed, nil
+}
+
+func checkFormat(data []byte) error {
+    if len(data) < HEADER_SIZE + TAG_SIZE {
+        return errors.New("File too short or corrupted")
+    }
+    if !bytes.Equal(data[:MAGIC_SIZE], []byte(MAGIC)) {
+        return errors.New("Unsupported file format (not produced by this AES-GCM example)")
+    }
+    return nil
+}
+
+func openData(aes *wolfSSL.Aes, password []byte, data []byte, size int) ([]byte, error) {
+    if err := checkFormat(data); err != nil {
+        return nil, err
+    }
+
+    header     := data[:HEADER_SIZE]
+    salt       := header[MAGIC_SIZE:MAGIC_SIZE+SALT_SIZE]
+    nonce      := header[MAGIC_SIZE+SALT_SIZE:]
+    ciphertext := data[HEADER_SIZE:len(data)-TAG_SIZE]
+    tag        := data[len(data)-TAG_SIZE:]
+
+    output := make([]byte, len(ciphertext))
+
+    derivedKey := make([]byte, size)
+    ret := wolfSSL.Wc_PBKDF2(derivedKey, password, len(password), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
+    if ret != 0 {
+        return nil, errors.New("Failed to stretch key")
+    }
+
+    ret = wolfSSL.Wc_AesGcmSetKey(aes, derivedKey, size)
+    if ret != 0 {
+        return nil, fmt.Errorf("Failed to set AES key %d", ret)
+    }
+
+    ret = wolfSSL.Wc_AesGcmDecrypt(aes, output, ciphertext, nonce, tag, header)
+    if ret != 0 {
+        return nil, errors.New("Authentication failed: wrong password or corrupted file")
+    }
+    return output, nil
+}
+
+func writeFile(outFile string, data []byte) {
     out, err := os.Create(outFile)
     if err != nil {
         println(err.Error())
@@ -148,38 +167,15 @@ func AesEncrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
     }
     defer out.Close()
 
-    _, err = out.Write(salt[0:SALT_SIZE])
+    _, err = out.Write(data)
     if err != nil {
         println(err.Error())
-        os.Exit(1)
-    }
-    _, err = out.Write(iv[0:wolfSSL.AES_BLOCK_SIZE])
-    if err != nil {
-        println(err.Error())
-        os.Exit(1)
-    }
-    _, err = out.Write(output[0:length])
-    if err != nil {
-        println(err.Error())
-        os.Exit(1)
-    }
-
-    ret = wolfSSL.Wc_FreeRng(&rng)
-    if ret != 0 {
-        fmt.Println("Failed to free RNG")
         os.Exit(1)
     }
 }
 
-func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
-    var rng    wolfSSL.WC_RNG
-    var output []byte
-    var iv     []byte = make([]byte, wolfSSL.AES_BLOCK_SIZE)
-    var salt   []byte = make([]byte, SALT_SIZE)
-
-    var length      int
-    var inputLength int
-    var i           int = 0
+func AesEncrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
+    key := getPass()
 
     input, err := os.ReadFile(inFile)
     if err != nil {
@@ -187,101 +183,36 @@ func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
         os.Exit(1)
     }
 
-    inputLength = len(input)
-    length = inputLength
-
-    if length < wolfSSL.AES_BLOCK_SIZE + SALT_SIZE {
-        fmt.Println("File too short or corrupted")
+    sealed, err := sealData(aes, key, input, size)
+    if err != nil {
+        fmt.Println(err)
         os.Exit(1)
     }
 
-    output = make([]byte, length)
+    writeFile(outFile, sealed)
+}
+
+func AesDecrypt(aes *wolfSSL.Aes, inFile string, outFile string, size int) {
+    input, err := os.ReadFile(inFile)
+    if err != nil {
+        println(err.Error())
+        os.Exit(1)
+    }
+
+    if err = checkFormat(input); err != nil {
+        fmt.Println(err)
+        os.Exit(1)
+    }
 
     key := getPass()
 
-    for i < SALT_SIZE {
-        salt[i] = input[i]
-        i++
-    }
-
-    i = SALT_SIZE
-    for i < (wolfSSL.AES_BLOCK_SIZE + SALT_SIZE) {
-        iv[i - SALT_SIZE] = input[i]
-        i++
-    }
-
-    ret := wolfSSL.Wc_InitRng(&rng)
-    if ret != 0 {
-        fmt.Println("Failed to initialize RNG")
-        os.Exit(1)
-    }
-
-    derivedKey := make([]byte, size)
-    ret = wolfSSL.Wc_PBKDF2(derivedKey, key, len(key), salt, SALT_SIZE, 4096, size, wolfSSL.WC_SHA256)
-    if ret != 0 {
-        fmt.Println("Failed to stretch key")
-        os.Exit(1)
-    }
-
-    ret = wolfSSL.Wc_AesSetKey(aes, derivedKey, size, iv, wolfSSL.AES_DECRYPTION)
-    if ret != 0 {
-        fmt.Println("Failed to set AES key", ret)
-        os.Exit(1)
-    }
-
-    length -= (wolfSSL.AES_BLOCK_SIZE + SALT_SIZE)
-
-    i = 0
-    for i < length {
-        input[i] = input[i + (SALT_SIZE + wolfSSL.AES_BLOCK_SIZE)]
-        i++
-    }
-
-    ret = wolfSSL.Wc_AesCbcDecrypt(aes, output, input, length)
-    if ret != 0 {
-        fmt.Println("Failed AES encrypt",ret)
-        os.Exit(1)
-    }
-
-    if salt[0] != 0 {
-        if length < wolfSSL.AES_BLOCK_SIZE {
-            fmt.Println("File too short or corrupted")
-            os.Exit(1)
-        }
-        padLen := int(output[length-1])
-        good := subtle.ConstantTimeLessOrEq(1, padLen) &
-            subtle.ConstantTimeLessOrEq(padLen, wolfSSL.AES_BLOCK_SIZE)
-        safePadLen := subtle.ConstantTimeSelect(good, padLen, 0)
-        for j := 0; j < wolfSSL.AES_BLOCK_SIZE; j++ {
-            eq := subtle.ConstantTimeByteEq(output[length-1-j], byte(padLen))
-            useByte := subtle.ConstantTimeLessOrEq(j+1, safePadLen)
-            good &= subtle.ConstantTimeSelect(useByte, eq, 1)
-        }
-        if good != 1 {
-            fmt.Println("Invalid padding")
-            os.Exit(1)
-        }
-        length -= padLen
-    }
-
-    out, err := os.Create(outFile)
+    output, err := openData(aes, key, input, size)
     if err != nil {
-        println(err.Error())
-        os.Exit(1)
-    }
-    defer out.Close()
-
-    _, err = out.Write(output[0:length])
-    if err != nil {
-        println(err.Error())
+        fmt.Println(err)
         os.Exit(1)
     }
 
-    ret = wolfSSL.Wc_FreeRng(&rng)
-    if ret != 0 {
-        fmt.Println("Failed to free RNG")
-        os.Exit(1)
-    }
+    writeFile(outFile, output)
 }
 
 func main() {
@@ -305,7 +236,11 @@ func main() {
 
     sizeCheck(&size)
 
-    wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID)
+    ret := wolfSSL.Wc_AesInit(aes, nil, wolfSSL.INVALID_DEVID)
+    if ret != 0 {
+        fmt.Println("Failed to initialize Aes struct", ret)
+        os.Exit(1)
+    }
     defer wolfSSL.Wc_AesFree(aes)
 
     if operation == "enc" {
@@ -315,5 +250,6 @@ func main() {
     } else {
         fmt.Println("Invalid operation. Please use enc or dec.");
         fmt.Println("Usage: ./aesEncrypt <infile name> <outfile name> <enc/dec> <key size>");
+        os.Exit(1)
     }
 }

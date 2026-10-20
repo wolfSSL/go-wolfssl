@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 /* server-psk.go
  *
  * Copyright (C) 2006-2023 wolfSSL Inc.
@@ -29,9 +32,8 @@ package main
 //                           unsigned char* key, unsigned int key_max_len)
 //{
 //    (void)ssl;
-//    (void)key_max_len;
 //
-//    if (strncmp(identity, "Client_identity", 15) != 0) {
+//    if (key_max_len < PSK_KEY_LEN || strcmp(identity, "Client_identity") != 0) {
 //        return 0;
 //    }
 //
@@ -102,6 +104,11 @@ func main() {
 
     /* Retrieve file descriptor from net.Conn type */
     file,err := conn.(*net.TCPConn).File()
+    if err != nil {
+        fmt.Println("Error getting file descriptor: ", err.Error())
+        os.Exit(1)
+    }
+    defer file.Close()
     fd := file.Fd()
     wolfSSL.WolfSSL_set_fd(ssl, int(fd))
 
@@ -118,10 +125,10 @@ func main() {
 
     /* Recieve then print the message from client */
     ret = wolfSSL.WolfSSL_read(ssl, buf, 256)
-    if ret < 0 {
+    if ret <= 0 {
         fmt.Println(" WolfSSL_read failed ");
     } else {
-        fmt.Println("Client says : ", string(buf));
+        fmt.Println("Client says : ", string(buf[:ret]));
     }
 
     /* Create the message and send to client */

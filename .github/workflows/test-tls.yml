@@ -65,6 +65,19 @@ jobs:
           go get golang.org/x/term
           go mod tidy
 
+      - name: Check example certificate validity
+        run: |
+          # The clients verify the server, so an expired bundled chain fails every handshake below
+          for c in examples/certs/ca-cert.pem examples/certs/server-cert.pem; do
+            if ! openssl x509 -checkend 0 -noout -in "$c"; then
+              echo "::error::$c has expired; refresh examples/certs from wolfSSL's certs directory"
+              exit 1
+            fi
+            if ! openssl x509 -checkend 5184000 -noout -in "$c"; then
+              echo "::warning::$c expires within 60 days; refresh examples/certs"
+            fi
+          done
+
       - name: Build TLS server and client
         run: |
           (cd examples/server && go build -o server server.go)
@@ -85,6 +98,25 @@ jobs:
             echo "TLS handshake succeeded"
           else
             echo "TLS handshake failed"
+            exit 1
+          fi
+
+      - name: Test TLS client rejects a server name the certificate does not cover
+        run: |
+          (cd examples/server && ./server) &
+          SERVER_PID=$!
+          sleep 1
+
+          RC=0
+          OUTPUT=$(cd examples/client && timeout 5 ./client wrong.example.org 2>&1) || RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if [ $RC -ne 0 ] && [ $RC -ne 124 ] && echo "$OUTPUT" | grep -q "wolfSSL_connect error"; then
+            echo "Hostname mismatch rejected"
+          else
+            echo "Client accepted a mismatched server name"
             exit 1
           fi
 
@@ -111,12 +143,108 @@ jobs:
             exit 1
           fi
 
+      - name: Test PSK callback bounds and identity matching
+        run: |
+          # Compile each example's cgo PSK callback on its own and call it directly
+          extract() { awk '/^import "C"/{exit} f{print} /^\/\/ #cgo/{f=1}' "$1" | sed -E 's#^// ?##'; }
+          extract examples/client/client-psk.go > /tmp/psk_client.c
+          cat >> /tmp/psk_client.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #define CHECK(c) do { if (!(c)) { printf("FAIL: %s\n", #c); return 1; } } while (0)
+          int main(void) {
+              char id[129];
+              unsigned char key[64];
+              unsigned char* smallKey = malloc(PSK_KEY_LEN - 1);
+              char* smallId = malloc(4);
+              CHECK(my_psk_client_cb(NULL, NULL, id, 128, key, sizeof(key)) == PSK_KEY_LEN);
+              CHECK(strcmp(id, "Client_identity") == 0);
+              CHECK(my_psk_client_cb(NULL, NULL, id, 128, smallKey, PSK_KEY_LEN - 1) == 0);
+              CHECK(my_psk_client_cb(NULL, NULL, smallId, 4, key, sizeof(key)) == 0);
+              free(smallKey);
+              free(smallId);
+              printf("PSK client callback checks passed\n");
+              return 0;
+          }
+          EOF
+          extract examples/server/server-psk.go > /tmp/psk_server.c
+          cat >> /tmp/psk_server.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #define CHECK(c) do { if (!(c)) { printf("FAIL: %s\n", #c); return 1; } } while (0)
+          int main(void) {
+              unsigned char key[64];
+              unsigned char* smallKey = malloc(PSK_KEY_LEN - 1);
+              CHECK(my_psk_server_cb(NULL, "Client_identity", key, sizeof(key)) == PSK_KEY_LEN);
+              CHECK(my_psk_server_cb(NULL, "Client_identity_suffix", key, sizeof(key)) == 0);
+              CHECK(my_psk_server_cb(NULL, "Client_identit", key, sizeof(key)) == 0);
+              CHECK(my_psk_server_cb(NULL, "Client_identity", smallKey, PSK_KEY_LEN - 1) == 0);
+              free(smallKey);
+              printf("PSK server callback checks passed\n");
+              return 0;
+          }
+          EOF
+          for t in psk_client psk_server; do
+            gcc -Wall -Werror -fsanitize=address -I/usr/local/include /tmp/$t.c -o /tmp/$t
+            /tmp/$t
+          done
+
+      - name: Build DTLS server and client
+        run: |
+          (cd examples/server && go build -o dtls-server server-dtls.go)
+          (cd examples/client && go build -o dtls-client client-dtls.go)
+
+      - name: Test DTLS handshake
+        run: |
+          (cd examples/server && ./dtls-server) &
+          SERVER_PID=$!
+          sleep 1
+
+          OUTPUT=$(cd examples/client && timeout 5 ./dtls-client 2>&1) || true
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if echo "$OUTPUT" | grep -q "Server says"; then
+            echo "DTLS handshake succeeded"
+          else
+            echo "DTLS handshake failed"
+            exit 1
+          fi
+
+      - name: Test DTLS client rejects a server name the certificate does not cover
+        run: |
+          (cd examples/server && ./dtls-server) &
+          SERVER_PID=$!
+          sleep 1
+
+          RC=0
+          OUTPUT=$(cd examples/client && timeout 5 ./dtls-client wrong.example.org 2>&1) || RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          echo "Client output: $OUTPUT"
+          if [ $RC -ne 0 ] && [ $RC -ne 124 ] && echo "$OUTPUT" | grep -q "wolfSSL_connect error"; then
+            echo "Hostname mismatch rejected"
+          else
+            echo "Client accepted a mismatched server name"
+            exit 1
+          fi
+
       - name: Build crypto examples
         run: |
           go build examples/hash/fileHash.go
           go build examples/ecc-sign-verify/ecc-sign-verify.go
           go build examples/x509/certVerify.go
           go build examples/x509/extractKey.go
+
+      - name: Run crypto examples
+        run: |
+          ./ecc-sign-verify
+          (cd examples/x509 && ../../certVerify && ../../extractKey)
+
+      - name: Run AES file example tests
+        run: go test ./examples/aes-encrypt
 
       - name: Show logs on failure
         if: failure() || cancelled()

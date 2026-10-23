@@ -1,0 +1,83 @@
+name: wolftls Default Config Tests
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+jobs:
+  wolftls_default:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+        go_version: [ '1.23' ]
+    name: ${{ matrix.os }} wolftls default config (Go ${{ matrix.go_version }})
+    if: github.repository_owner == 'wolfssl'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ matrix.go_version }}
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
+
+      - name: Resolve wolfSSL revision
+        id: wolfssl-rev
+        run: echo "sha=$(git ls-remote https://github.com/wolfSSL/wolfssl.git refs/heads/master | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache wolfSSL build
+        id: cache-wolfssl
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /tmp/wolfssl-install
+          key: wolfssl-default-${{ runner.os }}-${{ steps.wolfssl-rev.outputs.sha }}-${{ hashFiles('.github/workflows/wolftls-default.yml') }}
+
+      - name: Build native wolfSSL (default config)
+        if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+        run: |
+          git init -q /tmp/wolfssl
+          cd /tmp/wolfssl
+          git fetch -q --depth 1 https://github.com/wolfSSL/wolfssl.git ${{ steps.wolfssl-rev.outputs.sha }}
+          git checkout -q FETCH_HEAD
+          ./autogen.sh
+          ./configure --prefix=/tmp/wolfssl-install
+          make -j$(nproc)
+          make install
+
+      - name: Install wolfSSL system-wide
+        run: |
+          sudo cp -r /tmp/wolfssl-install/include/* /usr/local/include/
+          sudo cp -r /tmp/wolfssl-install/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Generate options.go
+        run: ./generateOptions.sh /usr/local
+
+      - name: Run wolftls config tests
+        # Feature-dependent tests skip here; the rest cover the fallback paths.
+        run: |
+          go test -run "^($(grep -oE '^func Test[A-Za-z0-9_]+' wolftls/config_test.go | cut -d' ' -f2 | paste -sd'|' -))\$" ./wolftls
+
+      - name: Show logs on failure
+        if: failure() || cancelled()
+        run: |
+          echo "wolftls default config tests failed"
+          go env

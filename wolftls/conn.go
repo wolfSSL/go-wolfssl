@@ -360,6 +360,12 @@ func (c *Conn) doHandshake() error {
 	if strings.IndexByte(c.config.ServerName, 0) >= 0 {
 		return errors.New("wolftls: ServerName contains NUL byte")
 	}
+	if err := checkNextProtos(c.config.NextProtos); err != nil {
+		return err
+	}
+	if err := checkCipherSuites(c.config.CipherSuites); err != nil {
+		return err
+	}
 
 	// A client with verification enabled must set ServerName; without it the
 	// certificate name is never checked, so reject rather than proceed. This is
@@ -392,6 +398,9 @@ func (c *Conn) doHandshake() error {
 			c.freeCtxLocked()
 			return fmt.Errorf("wolftls: set_min_proto_version(0x%x) rejected: %d", c.config.MinVersion, ret)
 		}
+	} else if ret := setDefaultMinVersion(c.ctx); ret != wolfSSL.WOLFSSL_SUCCESS {
+		c.freeCtxLocked()
+		return fmt.Errorf("wolftls: setting the default TLS 1.2 minimum failed: %d", ret)
 	}
 	if c.config.MaxVersion != 0 {
 		if ret := wolfSSL.WolfSSL_CTX_set_max_proto_version(c.ctx, int(c.config.MaxVersion)); ret != wolfSSL.WOLFSSL_SUCCESS {
@@ -459,8 +468,9 @@ func (c *Conn) doHandshake() error {
 			}
 		}
 		if len(cert.CertDER) > 0 {
-			ret := wolfSSL.WolfSSL_CTX_use_certificate_buffer(c.ctx, cert.CertDER[0],
-				len(cert.CertDER[0]), wolfSSL.SSL_FILETYPE_ASN1)
+			chain := cert.derChain()
+			ret := wolfSSL.WolfSSL_CTX_use_certificate_chain_buffer_format(c.ctx, chain,
+				len(chain), wolfSSL.SSL_FILETYPE_ASN1)
 			if ret != wolfSSL.WOLFSSL_SUCCESS {
 				c.freeCtxLocked()
 				return fmt.Errorf("wolftls: failed to load DER certificate (%d)", ret)
@@ -494,45 +504,17 @@ func (c *Conn) doHandshake() error {
 	// Requires wolfSSL built with WOLFSSL_CERT_SETUP_CB. To also support
 	// listeners that have no static cert at construction time, wolfSSL
 	// must be built with WOLFSSL_NO_INIT_CTX_KEY.
+	var certCbErr error
 	if c.config.GetCertificate != nil && !c.isClient {
+		var static *Certificate
+		if len(c.config.Certificates) > 0 {
+			first := c.config.Certificates[0]
+			static = &first
+		}
 		getCert := c.config.GetCertificate
 		c.certCbID = registerCertSetupCallback(func(ssl *wolfSSL.WOLFSSL) int {
-			serverName := wolfSSL.WolfSSL_SNI_GetServerName(ssl)
-			alpn, _ := wolfSSL.WolfSSL_ALPN_GetPeerProtocol(ssl)
-			cert, err := getCert(&ClientHelloInfo{
-				ServerName:      serverName,
-				SupportedProtos: alpn,
-			})
-			if err != nil || cert == nil {
+			if !selectCertificate(ssl, getCert, static, useCertificate, &certCbErr) {
 				return 0 // signal fatal alert per CertSetupCb contract
-			}
-			if len(cert.CertPEM) > 0 {
-				ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, cert.CertPEM,
-					len(cert.CertPEM), wolfSSL.SSL_FILETYPE_PEM)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.KeyPEM) > 0 {
-				ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyPEM,
-					len(cert.KeyPEM), wolfSSL.SSL_FILETYPE_PEM)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.CertDER) > 0 {
-				ret := wolfSSL.WolfSSL_use_certificate_buffer(ssl, cert.CertDER[0],
-					len(cert.CertDER[0]), wolfSSL.SSL_FILETYPE_ASN1)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
-			}
-			if len(cert.KeyDER) > 0 {
-				ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyDER,
-					len(cert.KeyDER), wolfSSL.SSL_FILETYPE_ASN1)
-				if ret != wolfSSL.WOLFSSL_SUCCESS {
-					return 0
-				}
 			}
 			return 1 // success per CertSetupCb contract
 		})
@@ -556,8 +538,8 @@ func (c *Conn) doHandshake() error {
 		return errors.New("wolftls: failed to create WOLFSSL session")
 	}
 
-	// Set SNI
-	if c.config.ServerName != "" {
+	// Set SNI; RFC 6066 forbids IP literals in it
+	if c.config.ServerName != "" && serverNameIP(c.config.ServerName) == nil {
 		sniData := []byte(c.config.ServerName)
 		ret := wolfSSL.WolfSSL_UseSNI(c.ssl, wolfSSL.WOLFSSL_SNI_HOST_NAME,
 			sniData, len(sniData))
@@ -570,7 +552,20 @@ func (c *Conn) doHandshake() error {
 	// Bind the expected hostname so wolfSSL checks the server leaf
 	// certificate's SAN/CN against it during the handshake
 	if c.isClient && c.config.ServerName != "" && !c.config.InsecureSkipVerify {
-		ret := wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		var ret int
+		if ip := serverNameIP(c.config.ServerName); ip != nil {
+			ret = sslCheckIPAddress(c.ssl, ip)
+		} else {
+			ret = wolfSSL.WolfSSL_check_domain_name(c.ssl, c.config.ServerName)
+		}
+		switch ret {
+		case ipAltNameMissing:
+			c.freeSSL()
+			return errors.New("wolftls: verifying an IP ServerName requires wolfSSL built with WOLFSSL_IP_ALT_NAME")
+		case ipCheckUnavailable:
+			c.freeSSL()
+			return errors.New("wolftls: verifying an IP ServerName requires wolfSSL 5.9.2 or later, or WOLFSSL_HOSTNAME_VERIFY_ALT_NAME_ONLY")
+		}
 		if ret != wolfSSL.WOLFSSL_SUCCESS {
 			c.freeSSL()
 			return fmt.Errorf("wolftls: failed to set domain name check (%d)", ret)
@@ -604,6 +599,9 @@ func (c *Conn) doHandshake() error {
 		errCode := wolfSSL.WolfSSL_get_error(c.ssl, ret)
 		errMsg := wolfSSL.WolfSSL_ERR_error_string(errCode, nil)
 		c.cleanup()
+		if certCbErr != nil {
+			return fmt.Errorf("wolftls: GetCertificate: %w", certCbErr)
+		}
 		return fmt.Errorf("wolftls: handshake failed: %s (%d)", errMsg, errCode)
 	}
 
@@ -653,10 +651,11 @@ func (c *Conn) cleanup() {
 
 // buildConnectionState populates c.connState from the wolfSSL session.
 func (c *Conn) buildConnectionState() error {
-	c.connState.HandshakeComplete = true
 	if c.isClient {
-		// Client: SNI is what we sent; mirror the value from config.
-		c.connState.ServerName = c.config.ServerName
+		// Client: SNI is what we sent; IP literals are never sent.
+		if serverNameIP(c.config.ServerName) == nil {
+			c.connState.ServerName = c.config.ServerName
+		}
 	} else {
 		// Server: SNI is what the client sent in its ClientHello; query
 		// the wolfSSL session. Required for server-side dispatch logic
@@ -680,16 +679,29 @@ func (c *Conn) buildConnectionState() error {
 	}
 
 	// Peer certificates
-	c.extractPeerCerts()
-
+	if err := c.extractPeerCerts(); err != nil {
+		c.connState = ConnectionState{}
+		return err
+	}
+	c.connState.HandshakeComplete = true
 	return nil
 }
 
 // extractPeerCerts retrieves the peer certificate chain from wolfSSL as
 // DER-encoded byte slices. Must be called while c.ssl is still valid.
 // The returned slices are Go-owned copies — safe to use after WolfSSL_free.
-func (c *Conn) extractPeerCerts() {
+// It fails when a required peer chain is missing and a callback would inspect it.
+func (c *Conn) extractPeerCerts() error {
 	c.connState.PeerCertificates = wolfSSL.WolfSSL_get_peer_cert_chain_DER(c.ssl)
+	if len(c.connState.PeerCertificates) > 0 {
+		return nil
+	}
+	required := c.isClient || c.config.ClientAuth == RequireAnyClientCert ||
+		c.config.ClientAuth == RequireAndVerifyClientCert
+	if required && (c.config.VerifyPeerCertificate != nil || c.config.VerifyConnection != nil) {
+		return errors.New("wolftls: peer certificate chain unavailable for verification callbacks")
+	}
+	return nil
 }
 
 // ConnectionState returns the state of the TLS connection. If the handshake
@@ -1087,4 +1099,58 @@ func (c *Conn) freeCtxLocked() {
 		wolfSSL.WolfSSL_CTX_free(c.ctx)
 		c.ctx = nil
 	}
+}
+
+// selectCertificate installs the certificate getCert picks on ssl, or static
+// when it returns nil, so a repeated cert-setup callback never keeps an
+// earlier choice.
+func selectCertificate(ssl *wolfSSL.WOLFSSL, getCert func(*ClientHelloInfo) (*Certificate, error),
+	static *Certificate, install func(*wolfSSL.WOLFSSL, *Certificate) bool, errp *error) bool {
+	alpn, _ := wolfSSL.WolfSSL_ALPN_GetPeerProtocol(ssl)
+	cert, err := getCert(&ClientHelloInfo{
+		ServerName:      wolfSSL.WolfSSL_SNI_GetServerName(ssl),
+		SupportedProtos: alpn,
+	})
+	if err != nil {
+		*errp = err
+		return false
+	}
+	if cert == nil {
+		cert = static
+	}
+	return cert != nil && install(ssl, cert)
+}
+
+// useCertificate loads cert's chain and private key onto ssl.
+func useCertificate(ssl *wolfSSL.WOLFSSL, cert *Certificate) bool {
+	if len(cert.CertPEM) > 0 {
+		ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, cert.CertPEM,
+			len(cert.CertPEM), wolfSSL.SSL_FILETYPE_PEM)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.KeyPEM) > 0 {
+		ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyPEM,
+			len(cert.KeyPEM), wolfSSL.SSL_FILETYPE_PEM)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.CertDER) > 0 {
+		chain := cert.derChain()
+		ret := wolfSSL.WolfSSL_use_certificate_chain_buffer_format(ssl, chain,
+			len(chain), wolfSSL.SSL_FILETYPE_ASN1)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	if len(cert.KeyDER) > 0 {
+		ret := wolfSSL.WolfSSL_use_PrivateKey_buffer(ssl, cert.KeyDER,
+			len(cert.KeyDER), wolfSSL.SSL_FILETYPE_ASN1)
+		if ret != wolfSSL.WOLFSSL_SUCCESS {
+			return false
+		}
+	}
+	return true
 }

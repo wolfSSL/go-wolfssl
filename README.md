@@ -16,9 +16,10 @@ make
 sudo make install
 ```
 
-If you plan to use the `wolftls` subpackage and need concurrent `Read` and
-`Write` on a single `Conn` to run in parallel, add `--enable-writedup` to the
-`./configure` line above. Otherwise, the calls will be serialized.
+If you plan to use the `wolftls` subpackage and want concurrent `Read` and
+`Write` on a single `Conn` to process records in parallel, add
+`--enable-writedup` to the `./configure` line above. Without it, concurrent
+`Read` and `Write` still work, but they take turns inside wolfSSL.
 
 Once wolfSSL is installed clone the go-wolfssl repo into the same parent
 directory.

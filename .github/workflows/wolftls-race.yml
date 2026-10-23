@@ -1,0 +1,84 @@
+name: wolftls Race Tests
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '**' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+permissions:
+  contents: read
+
+jobs:
+  wolftls_race:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+        go_version: [ '1.23' ]
+        config:
+          - name: shared-session
+            wolfssl_configure: '--enable-all --enable-opensslall --enable-opensslextra'
+            packages: './wolftls ./handles'
+            write_dup: '0'
+          - name: write-dup
+            wolfssl_configure: '--enable-all --enable-opensslall --enable-opensslextra --enable-writedup'
+            packages: './wolftls'
+            write_dup: '1'
+    name: ${{ matrix.os }} race (Go ${{ matrix.go_version }}, ${{ matrix.config.name }})
+    if: github.repository_owner == 'wolfssl'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    env:
+      # wolfSSL commit these tests were validated against; bump deliberately.
+      WOLFSSL_REF: f99453320ff306fe5bfb10788117f18c9bfeaf6b
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ matrix.go_version }}
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
+
+      - name: Cache wolfSSL build
+        id: cache-wolfssl
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /tmp/wolfssl-install
+          key: wolfssl-race-${{ runner.os }}-${{ matrix.config.name }}-${{ env.WOLFSSL_REF }}-${{ hashFiles('.github/workflows/wolftls-race.yml') }}
+
+      - name: Build native wolfSSL
+        if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+        run: |
+          git init -q /tmp/wolfssl
+          cd /tmp/wolfssl
+          git fetch -q --depth 1 https://github.com/wolfSSL/wolfssl.git ${{ env.WOLFSSL_REF }}
+          git checkout -q FETCH_HEAD
+          ./autogen.sh
+          ./configure --prefix=/tmp/wolfssl-install ${{ matrix.config.wolfssl_configure }}
+          make -j$(nproc)
+          make install
+
+      - name: Point go-wolfssl at the wolfSSL build
+        run: ./generateOptions.sh /tmp/wolfssl-install
+
+      - name: Run race tests
+        env:
+          LD_LIBRARY_PATH: /tmp/wolfssl-install/lib
+          WOLFTLS_EXPECT_WRITE_DUP: ${{ matrix.config.write_dup }}
+        run: go test -race ${{ matrix.config.packages }}
+
+      - name: Show logs on failure
+        if: failure() || cancelled()
+        run: go env

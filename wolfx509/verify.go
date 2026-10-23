@@ -21,6 +21,7 @@
 package wolfx509
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -34,10 +35,15 @@ type VerifyOptions struct {
 	Intermediates *CertPool     // wire-presented intermediates; optional.
 	DNSName       string        // checked against SANs after chain verify.
 	CurrentTime   time.Time     // rejected if non-zero (wolfSSL uses system clock).
+	KeyUsages     []ExtKeyUsage // chain EKUs must permit one; empty skips the check.
 }
 
 // Verify runs wolfSSL_X509_verify_cert against Roots, using Intermediates
-// as the untrusted chain. wolfSSL enforces CA:TRUE per RFC 5280.
+// as the untrusted chain. wolfSSL enforces CA:TRUE per RFC 5280. On success
+// it returns one chain, from a copy of c up to the trust anchor. Every chain
+// certificate is a new, fully usable Certificate owned by the caller, who
+// releases them with FreeChains (or each Free) rather than waiting on GC.
+// Unlike crypto/x509, an empty KeyUsages does not default to server auth.
 func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -76,6 +82,134 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 		}
 	}
 
+	// Exclusive lock: X509_verify_cert mutates the store (injects
+	// intermediates into store->certs, loads/unloads TEMP_CA signers in its
+	// CertManager), and wolfSSL does not support concurrent verifies on one
+	// store.
+	opts.Roots.mu.Lock()
+	defer opts.Roots.mu.Unlock()
+	if opts.Roots.store == nil {
+		return nil, fmt.Errorf("%w: roots pool was freed or failed to initialize", ErrVerifyFailed)
+	}
+
+	filtering := len(opts.KeyUsages) > 0 && !hasExtKeyUsage(opts.KeyUsages, ExtKeyUsageAny)
+	// A rebuild may drop a Roots certificate that narrowed KeyUsages, so
+	// those rebuilds trust only the Roots not yet excluded.
+	numInter := len(intermediates)
+	if filtering {
+		for _, x509 := range opts.Roots.certs {
+			if wolfSSL.WolfSSL_X509_up_ref(x509) != wolfSSL.WOLFSSL_SUCCESS {
+				return nil, fmt.Errorf("%w: X509_up_ref failed on root pool certificate", ErrVerifyFailed)
+			}
+			intermediates = append(intermediates, x509)
+		}
+	}
+
+	ders := make([][]byte, len(intermediates))
+	for i, x509 := range intermediates {
+		if wolfSSL.WolfSSL_i2d_X509(x509, &ders[i]) <= 0 {
+			return nil, fmt.Errorf("%w: i2d_X509 failed on pool certificate", ErrVerifyFailed)
+		}
+	}
+
+	// wolfSSL builds one path per call. When a path fails KeyUsages, rebuild
+	// it without each CA that narrowed the usable set, breadth first.
+	queue := [][]bool{make([]bool, len(intermediates))}
+	tried := map[string]bool{exclusionKey(queue[0]): true}
+	ekuRejected := false
+	budget := 2*len(intermediates) + 16
+	for attempt := 0; len(queue) > 0; attempt++ {
+		if attempt == budget {
+			return nil, fmt.Errorf("%w: gave up after %d chain rebuilds looking for one that permits KeyUsages", ErrUnsupported, budget)
+		}
+		excluded := queue[0]
+		queue = queue[1:]
+		var stackCerts []*wolfSSL.WOLFSSL_X509
+		for i, x509 := range intermediates[:numInter] {
+			if !excluded[i] {
+				stackCerts = append(stackCerts, x509)
+			}
+		}
+		store := opts.Roots.store
+		if filtering {
+			anchors, err := anchorStore(intermediates[numInter:], excluded[numInter:])
+			if err != nil {
+				return nil, err
+			}
+			store = anchors
+		}
+		path, err := c.verifyPath(store, stackCerts)
+		if filtering {
+			wolfSSL.WolfSSL_X509_STORE_free(store)
+		}
+		if err != nil {
+			if ekuRejected {
+				continue
+			}
+			return nil, err
+		}
+		if !ekuRejected && opts.DNSName != "" && wolfSSL.WolfSSL_X509_check_host(c.x, opts.DNSName) != 1 {
+			return nil, fmt.Errorf("%w: %q", ErrHostnameMismatch, opts.DNSName)
+		}
+		chain, err := parseChain(path)
+		if err != nil {
+			return nil, err
+		}
+		allowed, narrowing := chainExtKeyUsage(chain, opts.KeyUsages)
+		if allowed {
+			return [][]*Certificate{chain}, nil
+		}
+		FreeChains([][]*Certificate{chain})
+		ekuRejected = true
+		for _, ca := range narrowing {
+			next := append([]bool(nil), excluded...)
+			changed := false
+			for i := range intermediates {
+				if !excluded[i] && bytes.Equal(ders[i], ca.Raw) {
+					next[i] = true
+					changed = true
+				}
+			}
+			if key := exclusionKey(next); changed && !tried[key] {
+				tried[key] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return nil, fmt.Errorf("%w: certificate specifies an incompatible key usage", ErrVerifyFailed)
+}
+
+func exclusionKey(excluded []bool) string {
+	b := make([]byte, len(excluded))
+	for i, e := range excluded {
+		if e {
+			b[i] = 1
+		}
+	}
+	return string(b)
+}
+
+// anchorStore returns a new store trusting each root not marked excluded.
+func anchorStore(roots []*wolfSSL.WOLFSSL_X509, excluded []bool) (*wolfSSL.WOLFSSL_X509_STORE, error) {
+	store := wolfSSL.WolfSSL_X509_STORE_new()
+	if store == nil {
+		return nil, fmt.Errorf("%w: X509_STORE_new failed", ErrVerifyFailed)
+	}
+	for i, x509 := range roots {
+		if excluded[i] {
+			continue
+		}
+		if ret := wolfSSL.WolfSSL_X509_STORE_add_cert(store, x509); ret != wolfSSL.WOLFSSL_SUCCESS {
+			wolfSSL.WolfSSL_X509_STORE_free(store)
+			return nil, fmt.Errorf("%w: X509_STORE_add_cert failed (%d)", ErrVerifyFailed, ret)
+		}
+	}
+	return store, nil
+}
+
+// verifyPath runs X509_verify_cert for c with intermediates as the untrusted
+// chain and returns the DER of the path wolfSSL built, leaf first.
+func (c *Certificate) verifyPath(store *wolfSSL.WOLFSSL_X509_STORE, intermediates []*wolfSSL.WOLFSSL_X509) ([][]byte, error) {
 	stack := wolfSSL.WolfSSL_sk_X509_new_null()
 	if stack == nil {
 		return nil, fmt.Errorf("%w: sk_X509_new_null failed", ErrVerifyFailed)
@@ -87,23 +221,13 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 		}
 	}
 
-	// Exclusive lock: X509_verify_cert mutates the store (injects
-	// intermediates into store->certs, loads/unloads TEMP_CA signers in its
-	// CertManager), and wolfSSL does not support concurrent verifies on one
-	// store.
-	opts.Roots.mu.Lock()
-	defer opts.Roots.mu.Unlock()
-	if opts.Roots.store == nil {
-		return nil, fmt.Errorf("%w: roots pool was freed or failed to initialize", ErrVerifyFailed)
-	}
-
 	ctx := wolfSSL.WolfSSL_X509_STORE_CTX_new()
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: X509_STORE_CTX_new failed", ErrVerifyFailed)
 	}
 	defer wolfSSL.WolfSSL_X509_STORE_CTX_free(ctx)
 
-	if ret := wolfSSL.WolfSSL_X509_STORE_CTX_init(ctx, opts.Roots.store, c.x, stack); ret != wolfSSL.WOLFSSL_SUCCESS {
+	if ret := wolfSSL.WolfSSL_X509_STORE_CTX_init(ctx, store, c.x, stack); ret != wolfSSL.WOLFSSL_SUCCESS {
 		return nil, fmt.Errorf("%w: X509_STORE_CTX_init failed (ret=%d)", ErrVerifyFailed, ret)
 	}
 
@@ -122,11 +246,78 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 		return nil, verifyErr
 	}
 
-	if opts.DNSName != "" {
-		if wolfSSL.WolfSSL_X509_check_host(c.x, opts.DNSName) != 1 {
-			return nil, fmt.Errorf("%w: %q", ErrHostnameMismatch, opts.DNSName)
+	ders := verifiedChainDER(ctx)
+	if len(ders) == 0 {
+		return nil, fmt.Errorf("%w: wolfSSL did not report the verified chain", ErrUnsupported)
+	}
+	if !bytes.Equal(ders[0], c.Raw) {
+		return nil, fmt.Errorf("%w: verified chain does not start with the leaf", ErrVerifyFailed)
+	}
+	return ders, nil
+}
+
+// parseChain parses each DER into a new Certificate.
+func parseChain(ders [][]byte) ([]*Certificate, error) {
+	var chain []*Certificate
+	for _, der := range ders {
+		cert, err := ParseCertificate(der)
+		if err != nil {
+			FreeChains([][]*Certificate{chain})
+			return nil, fmt.Errorf("%w: parse verified chain: %v", ErrVerifyFailed, err)
+		}
+		chain = append(chain, cert)
+	}
+	return chain, nil
+}
+
+// FreeChains frees every certificate in chains, as returned by Verify.
+func FreeChains(chains [][]*Certificate) {
+	for _, chain := range chains {
+		for _, cert := range chain {
+			cert.Free()
 		}
 	}
+}
 
-	return [][]*Certificate{{c}}, nil
+// chainExtKeyUsage reports whether at least one usage in want is permitted
+// by every certificate in chain that carries extendedKeyUsage. When none is,
+// it also returns the CAs after the leaf that narrowed the usable set.
+// Usages match exactly, as crypto/x509's checkChainForKeyUsage does.
+func chainExtKeyUsage(chain []*Certificate, want []ExtKeyUsage) (bool, []*Certificate) {
+	if len(want) == 0 || hasExtKeyUsage(want, ExtKeyUsageAny) {
+		return true, nil
+	}
+	var narrowing []*Certificate
+	remaining := want
+	for i, cert := range chain {
+		if len(cert.ExtKeyUsage) == 0 && len(cert.UnknownExtKeyUsage) == 0 {
+			continue
+		}
+		if hasExtKeyUsage(cert.ExtKeyUsage, ExtKeyUsageAny) {
+			continue
+		}
+		var kept []ExtKeyUsage
+		for _, u := range remaining {
+			if hasExtKeyUsage(cert.ExtKeyUsage, u) {
+				kept = append(kept, u)
+			}
+		}
+		if len(kept) < len(remaining) && i > 0 {
+			narrowing = append(narrowing, cert)
+		}
+		remaining = kept
+	}
+	if len(remaining) > 0 {
+		return true, nil
+	}
+	return false, narrowing
+}
+
+func hasExtKeyUsage(usages []ExtKeyUsage, u ExtKeyUsage) bool {
+	for _, have := range usages {
+		if have == u {
+			return true
+		}
+	}
+	return false
 }

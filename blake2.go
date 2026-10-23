@@ -24,7 +24,7 @@ package wolfSSL
 // #include <wolfssl/wolfcrypt/hash.h>
 // #include <wolfssl/wolfcrypt/blake2.h>
 // #ifndef HAVE_BLAKE2S
-// typedef struct Blake2s {} Blake2s;
+// typedef struct Blake2s { word32 digestSz; } Blake2s;
 // void wc_Blake2s_HMAC(byte *out, const byte *in, const byte *key, word32 outlen, word32 inlen, word32 keylen) {
 //      return;
 // }
@@ -67,7 +67,7 @@ func Wc_InitBlake2s_WithKey(blake2s *C.struct_Blake2s, digestSz int, key []byte)
 }
 
 func Wc_Blake2sUpdate(blake2s *C.struct_Blake2s, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(in) > 0 {
         sanIn = (*C.uchar)(unsafe.Pointer(&in[0]))
@@ -79,16 +79,21 @@ func Wc_Blake2sUpdate(blake2s *C.struct_Blake2s, in []byte, sz int) int {
 }
 
 func Wc_Blake2sFinal(blake2s *C.struct_Blake2s, out []byte, requestSz int) int {
-    if requestSz < 0 || requestSz > len(out) { return BAD_FUNC_ARG }
-    if len(out) == 0 { return BAD_FUNC_ARG }
+    if blake2s == nil || requestSz < 0 || len(out) == 0 { return BAD_FUNC_ARG }
+    effSz := requestSz
+    if effSz == 0 { effSz = int(blake2s.digestSz) }
+    if effSz <= 0 || effSz > WC_BLAKE2S_256_DIGEST_SIZE || effSz > len(out) { return BAD_FUNC_ARG }
     return int(C.wc_Blake2sFinal(blake2s, (*C.uchar)(unsafe.Pointer(&out[0])),
-               C.word32(requestSz)))
+               C.word32(effSz)))
 }
 
-func Wc_Blake2s_HMAC(out []byte, in, key []byte, outlen int) {
+// Wc_Blake2s_HMAC_ex computes a BLAKE2s-256 HMAC and returns 0 or a wolfCrypt
+// error code.
+func Wc_Blake2s_HMAC_ex(out []byte, in, key []byte, outlen int) int {
     if outlen != WC_BLAKE2S_256_DIGEST_SIZE || len(out) < outlen {
-        return
+        return BAD_FUNC_ARG
     }
+    out = out[:outlen]
     zeroMemory(out)
 
     var state Blake2s
@@ -107,11 +112,11 @@ func Wc_Blake2s_HMAC(out []byte, in, key []byte, outlen int) {
 
     if keylen > WC_BLAKE2S_256_BLOCK_SIZE {
         ret = Wc_InitBlake2s(&state, WC_BLAKE2S_256_DIGEST_SIZE)
-        if ret != 0 { return }
+        if ret != 0 { return ret }
         ret = Wc_Blake2sUpdate(&state, key, keylen)
-        if ret != 0 { return }
+        if ret != 0 { return ret }
         ret = Wc_Blake2sFinal(&state, x_key[:], WC_BLAKE2S_256_DIGEST_SIZE)
-        if ret != 0 { return }
+        if ret != 0 { return ret }
     } else {
         copy(x_key[:], key)
         for i = keylen; i < WC_BLAKE2S_256_BLOCK_SIZE; i++ {
@@ -124,26 +129,32 @@ func Wc_Blake2s_HMAC(out []byte, in, key []byte, outlen int) {
     }
 
     ret = Wc_InitBlake2s(&state, WC_BLAKE2S_256_DIGEST_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sUpdate(&state, x_key[:], WC_BLAKE2S_256_BLOCK_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sUpdate(&state, in, inlen)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sFinal(&state, i_hash[:], WC_BLAKE2S_256_DIGEST_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
 
     for i = 0; i < WC_BLAKE2S_256_BLOCK_SIZE; i++ {
         x_key[i] ^= 0x5c ^ 0x36
     }
 
     ret = Wc_InitBlake2s(&state, WC_BLAKE2S_256_DIGEST_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sUpdate(&state, x_key[:], WC_BLAKE2S_256_BLOCK_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sUpdate(&state, i_hash[:], WC_BLAKE2S_256_DIGEST_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
     ret = Wc_Blake2sFinal(&state, i_hash[:], WC_BLAKE2S_256_DIGEST_SIZE)
-    if ret != 0 { return }
+    if ret != 0 { return ret }
 
     copy(out[:], i_hash[:])
+    return 0
+}
+
+// Deprecated: Wc_Blake2s_HMAC cannot report failure; use Wc_Blake2s_HMAC_ex.
+func Wc_Blake2s_HMAC(out []byte, in, key []byte, outlen int) {
+    Wc_Blake2s_HMAC_ex(out, in, key, outlen)
 }

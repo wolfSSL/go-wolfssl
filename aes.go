@@ -116,15 +116,23 @@ package wolfSSL
 //      return -174;
 // }
 // #endif
+// int wc_go_PrivateKeyUnlock(void);
+// int wc_go_PrivateKeyLock(void);
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_PBKDF2_Unlocked(byte* output, const byte* passwd, int pLen,
 //                               const byte* salt, int sLen, int iterations,
 //                               int kLen, int typeH)
 // {
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_PBKDF2(output, passwd, pLen, salt, sLen, iterations, kLen, typeH);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_PBKDF2(output, passwd, pLen, salt, sLen, iterations, kLen,
+//                         typeH);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
 // }
 import "C"
@@ -155,7 +163,8 @@ func Wc_AesFreeAllocAligned(aes *C.struct_Aes) {
 }
 
 func Wc_AesInit(aes *C.struct_Aes, heap []byte , devId int) int {
-        /* TODO: HANDLE NON NIL HEAP */
+    /* a Go slice cannot serve as a wolfCrypt heap hint */
+    if heap != nil { return BAD_FUNC_ARG }
     return int(C.wc_AesInit(aes, unsafe.Pointer(nil), C.int(devId)))
 }
 
@@ -166,6 +175,7 @@ func Wc_AesFree(aes *C.struct_Aes) {
 func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int) int {
     if length < 0 || length > len(key) { return BAD_FUNC_ARG }
     if len(key) == 0 { return BAD_FUNC_ARG }
+    if len(iv) != 0 && len(iv) < AES_IV_SIZE { return BAD_FUNC_ARG }
     var ivPtr *C.uchar
     if len(iv) > 0 {
         ivPtr = (*C.uchar)(unsafe.Pointer(&iv[0]))
@@ -175,14 +185,14 @@ func Wc_AesSetKey(aes *C.struct_Aes, key []byte, length int, iv []byte, dir int)
 }
 
 func Wc_AesCbcEncrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) || sz > len(out) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || sz > len(out) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     if sz == 0 { return 0 }
     return int(C.wc_AesCbcEncrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
                (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
 }
 
 func Wc_AesCbcDecrypt(aes *C.struct_Aes, out []byte, in []byte, sz int) int {
-    if sz < 0 || sz > len(in) || sz > len(out) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(in) || sz > len(out) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     if sz == 0 { return 0 }
     return int(C.wc_AesCbcDecrypt(aes, (*C.uchar)(unsafe.Pointer(&out[0])),
                (*C.uchar)(unsafe.Pointer(&in[0])), C.word32(sz)))
@@ -197,6 +207,10 @@ func Wc_AesGcmSetKey(aes *C.struct_Aes, key []byte, length int) int {
 func Wc_AesGcmEncrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, outAuthTag, inAAD []byte) int {
     if len(inIv) == 0 || len(outAuthTag) == 0 { return BAD_FUNC_ARG }
     if len(outCipher) < len(inPlain) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inPlain)) || !wolfcryptFitsWord32(len(inIv)) ||
+       !wolfcryptFitsWord32(len(outAuthTag)) || !wolfcryptFitsWord32(len(inAAD)) {
+        return BAD_FUNC_ARG
+    }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -220,6 +234,10 @@ func Wc_AesGcmEncrypt(aes *C.struct_Aes, outCipher, inPlain, inIv, outAuthTag, i
 func Wc_AesGcmDecrypt(aes *C.struct_Aes, outPlain, inCipher, inIv, inAuthTag, inAAD []byte) int {
     if len(inIv) == 0 || len(inAuthTag) == 0 { return BAD_FUNC_ARG }
     if len(outPlain) < len(inCipher) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inCipher)) || !wolfcryptFitsWord32(len(inIv)) ||
+       !wolfcryptFitsWord32(len(inAuthTag)) || !wolfcryptFitsWord32(len(inAAD)) {
+        return BAD_FUNC_ARG
+    }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -254,6 +272,9 @@ func Wc_AesGcm_Appended_Tag_Encrypt(aes *C.struct_Aes, outCipher, inPlain, inIv,
     }
 
     ret := Wc_AesGcmEncrypt(aes, longOutCipher[:(len(longOutCipher)-AES_BLOCK_SIZE)], inPlain, inIv, outAuthTag[:], inAAD)
+    if ret != 0 {
+        return nil, ret
+    }
     copy(longOutCipher[(len(longOutCipher)-AES_BLOCK_SIZE):], outAuthTag[:])
     return longOutCipher, ret
 }

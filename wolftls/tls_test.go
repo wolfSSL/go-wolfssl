@@ -26,6 +26,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	crand "crypto/rand"
+	stdtls "crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -799,6 +800,177 @@ func TestMinMaxVersion(t *testing.T) {
 	}
 }
 
+func TestVersionBoundsApplied(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	tests := []struct {
+		name                 string
+		serverMin, serverMax uint16
+		clientMin, clientMax uint16
+	}{
+		{"server floor TLS 1.3", VersionTLS13, 0, VersionTLS12, 0},
+		{"ceiling TLS 1.3", 0, VersionTLS13, 0, VersionTLS13},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverConfig := &Config{
+				Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}},
+				MinVersion:   tt.serverMin,
+				MaxVersion:   tt.serverMax,
+			}
+			clientConfig := &Config{
+				ServerName:         "localhost",
+				InsecureSkipVerify: true,
+				MinVersion:         tt.clientMin,
+				MaxVersion:         tt.clientMax,
+			}
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			defer ln.Close()
+
+			errc := make(chan error, 1)
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					errc <- err
+					return
+				}
+				tlsConn := Server(conn, serverConfig)
+				defer tlsConn.Close()
+				errc <- tlsConn.Handshake()
+			}()
+
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			tlsConn := Client(conn, clientConfig)
+			defer tlsConn.Close()
+			tlsConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+			clientErr := tlsConn.Handshake()
+			if clientErr != nil {
+				tlsConn.Close()
+			}
+			serverErr := <-errc
+			if clientErr != nil {
+				t.Fatalf("client handshake: %v", clientErr)
+			}
+			if serverErr != nil {
+				t.Fatalf("server handshake: %v", serverErr)
+			}
+			if v := tlsConn.ConnectionState().Version; v != VersionTLS13 {
+				t.Fatalf("negotiated 0x%x, want 0x%x", v, VersionTLS13)
+			}
+		})
+	}
+}
+
+func TestMinVersionFloorRejectsOlderPeer(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	serverConfig := &Config{
+		Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}},
+		MinVersion:   VersionTLS13,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		defer tlsConn.Close()
+		errc <- tlsConn.Handshake()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	client := stdtls.Client(conn, &stdtls.Config{
+		InsecureSkipVerify: true,
+		MaxVersion:         stdtls.VersionTLS12,
+	})
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	clientErr := client.Handshake()
+	client.Close()
+
+	if err := <-errc; err == nil {
+		t.Fatal("server accepted a TLS 1.2 peer despite MinVersion TLS 1.3")
+	}
+	if clientErr == nil {
+		t.Fatal("TLS 1.2-only client completed a handshake below the server floor")
+	}
+}
+
+func TestMaxVersionBelowCeilingEnforcedOrRejected(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	serverConfig := &Config{
+		Certificates: []Certificate{{CertPEM: certPEM, KeyPEM: keyPEM}},
+		MaxVersion:   VersionTLS12,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		defer tlsConn.Close()
+		errc <- tlsConn.Handshake()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	client := stdtls.Client(conn, &stdtls.Config{InsecureSkipVerify: true})
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	clientErr := client.Handshake()
+	version := client.ConnectionState().Version
+	client.Close()
+
+	serverErr := <-errc
+	if serverErr != nil {
+		// Builds without the OpenSSL layer cannot cap below their ceiling.
+		if !strings.Contains(serverErr.Error(), "OPENSSL_EXTRA") {
+			t.Fatalf("server handshake: %v", serverErr)
+		}
+		return
+	}
+	if clientErr != nil {
+		t.Fatalf("client handshake: %v", clientErr)
+	}
+	if version != stdtls.VersionTLS12 {
+		t.Fatalf("negotiated 0x%x above MaxVersion TLS 1.2", version)
+	}
+}
+
 func TestGetCertificate(t *testing.T) {
 	certPEM := loadFile(t, certPath("server-cert.pem"))
 	keyPEM := loadFile(t, certPath("server-key.pem"))
@@ -872,6 +1044,85 @@ func TestGetCertificate(t *testing.T) {
 	if !callbackCalled {
 		t.Fatal("GetCertificate was not called")
 	}
+}
+
+func TestGetCertificateRejectionIsEnforced(t *testing.T) {
+	certPEM := loadFile(t, certPath("server-cert.pem"))
+	keyPEM := loadFile(t, certPath("server-key.pem"))
+
+	certCbMu.Lock()
+	registered := len(certCbCallbacks)
+	certCbMu.Unlock()
+
+	var once sync.Once
+	called := make(chan struct{})
+	serverConfig := &Config{
+		GetCertificate: func(hello *ClientHelloInfo) (*Certificate, error) {
+			once.Do(func() { close(called) })
+			return nil, fmt.Errorf("host %q not allowed", hello.ServerName)
+		},
+		Certificates: []Certificate{{
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
+		}},
+	}
+	clientConfig := &Config{
+		ServerName:         "unknown.example.com",
+		InsecureSkipVerify: true,
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		tlsConn := Server(conn, serverConfig)
+		err = tlsConn.Handshake()
+		tlsConn.Close()
+		errc <- err
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	tlsConn := Client(conn, clientConfig)
+	tlsConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientErr := tlsConn.Handshake()
+	tlsConn.Close()
+
+	serverErr := <-errc
+	if serverErr == nil {
+		t.Fatal("server handshake succeeded although GetCertificate rejected the host")
+	}
+	if clientErr == nil {
+		t.Fatal("client handshake succeeded although GetCertificate rejected the host")
+	}
+
+	// Either the hook ran and rejected, or the build lacks it and the
+	// handshake must fail with the explicit install error.
+	select {
+	case <-called:
+	default:
+		if !strings.Contains(serverErr.Error(), "WOLFSSL_CERT_SETUP_CB") {
+			t.Fatalf("GetCertificate never ran and the error is not the install failure: %v", serverErr)
+		}
+	}
+	certCbMu.Lock()
+	leaked := len(certCbCallbacks) - registered
+	certCbMu.Unlock()
+	if leaked != 0 {
+		t.Fatalf("%d cert-setup callbacks still registered after the handshake failed", leaked)
+	}
+	t.Logf("rejected as expected: server: %v", serverErr)
 }
 
 func TestPeerCertsSurviveClose(t *testing.T) {

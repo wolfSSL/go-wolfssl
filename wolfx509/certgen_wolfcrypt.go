@@ -31,12 +31,12 @@ package wolfx509
 // #include <wolfssl/wolfcrypt/random.h>
 // #include <wolfssl/wolfcrypt/error-crypt.h>
 //
-// /* Stub fallbacks so go-wolfssl/wolfx509 builds against a plain
-//  * ./configure wolfSSL (no --enable-tailscale, no --enable-certreq, no
-//  * -DWOLFSSL_ACME_OID). Cert minting via wolfx509 needs all three to
-//  * actually work; without them these wrappers return NOT_COMPILED_IN
-//  * (-174) and the caller fails at runtime. The build/link surface
-//  * stays clean either way. */
+// #if !defined(WOLFSSL_CERT_GEN) || !defined(WOLFSSL_CERT_EXT) || \
+//     !defined(WOLFSSL_ALT_NAMES)
+// #error "wolfx509 requires wolfSSL built with WOLFSSL_CERT_GEN, WOLFSSL_CERT_EXT and WOLFSSL_ALT_NAMES"
+// #endif
+// /* Without WOLFSSL_CERT_REQ or WOLFSSL_ACME_OID these stubs return
+//  * NOT_COMPILED_IN (-174) and cert minting fails at runtime. */
 // #ifndef WOLFSSL_CERT_REQ
 // static int wc_MakeCertReq(Cert* cert, byte* derBuffer, word32 derSz,
 //                            RsaKey* rsaKey, ecc_key* eccKey) {

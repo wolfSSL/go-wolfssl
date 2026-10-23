@@ -169,6 +169,18 @@ func makeAndSignCSR(opts certBuildOpts, key KeyHandle) ([]byte, error) {
 	return buildAndSignCert(opts, nil, key, key, true)
 }
 
+// lockKeyHandles locks the *handles.EccKey values among keys for the
+// duration of a C-side build and returns the matching unlock function.
+func lockKeyHandles(keys ...KeyHandle) func() {
+	var ecc []*handles.EccKey
+	for _, k := range keys {
+		if e, ok := k.(*handles.EccKey); ok {
+			ecc = append(ecc, e)
+		}
+	}
+	return handles.LockEccKeys(ecc...)
+}
+
 // buildAndSignCert dispatches the C-side cert builder on pubKey.Algorithm().
 // parentDER, if non-nil, supplies the issuer name. isCSR routes through
 // wc_MakeCertReq (no RNG) instead of wc_MakeCert.
@@ -178,6 +190,11 @@ func buildAndSignCert(opts certBuildOpts, parentDER []byte, pubKey, signerKey Ke
 	}
 	if signerKey == nil {
 		return nil, errors.New("wolfx509: signerKey is nil")
+	}
+	unlock := lockKeyHandles(pubKey, signerKey)
+	defer unlock()
+	if pubKey.CKeyPtr() == nil || signerKey.CKeyPtr() == nil {
+		return nil, errors.New("wolfx509: key is not live")
 	}
 	if signerKey.CRngPtr() == nil {
 		return nil, errors.New("wolfx509: signerKey has no RNG, and cannot sign")

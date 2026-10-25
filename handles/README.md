@@ -16,7 +16,8 @@ direct-wrapper layer; opinionated lifecycle/marshal helpers live here.
 
 ## Algorithm tagging
 
-`EccKey` reports `Algorithm()` returning `handles.AlgECDSAP256` so
+`EccKey` reports `Algorithm()` returning `handles.AlgECDSAP256` for P-256
+keys (`handles.AlgUnknown` for any other curve) so
 algorithm-polymorphic consumers (e.g. `wolfx509.KeyHandle`) can
 dispatch on the key class without type-asserting. The `handles.Algorithm`
 enum is the shared algorithm taxonomy across `handles` and `wolfx509`.

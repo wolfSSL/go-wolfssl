@@ -25,7 +25,7 @@ package wolfSSL
 // #include <wolfssl/wolfcrypt/random.h>
 // #ifndef HAVE_CURVE25519
 // typedef struct curve25519_key {} curve25519_key;
-// #define EC25519_LITTLE_ENDIAN 1
+// #define EC25519_LITTLE_ENDIAN 0
 // int wc_curve25519_init(curve25519_key* key) {
 //     return -174;
 // }
@@ -39,6 +39,11 @@ package wolfSSL
 //     return -174;
 // }
 // int wc_curve25519_export_private_raw(curve25519_key* key, byte* out, word32* outLen) {
+//     return -174;
+// }
+// #define EC25519_BIG_ENDIAN 1
+// int wc_curve25519_export_private_raw_ex(curve25519_key* key, byte* out,
+//                                         word32* outLen, int endian) {
 //     return -174;
 // }
 // int wc_curve25519_make_key(WC_RNG* rng, int keysize, curve25519_key* key) {
@@ -107,10 +112,27 @@ func Wc_curve25519_import_public(pub []byte, key *C.struct_curve25519_key) int {
                C.word32(len(pub)), key, C.EC25519_LITTLE_ENDIAN))
 }
 
+// Deprecated: Wc_curve25519_export_private_raw writes big-endian bytes, which
+// Wc_curve25519_import_private does not read back; use
+// Wc_curve25519_export_private_raw_ex with EC25519_LITTLE_ENDIAN.
 func Wc_curve25519_export_private_raw(key *C.struct_curve25519_key, priv []byte) int {
     if len(priv) == 0 { return BAD_FUNC_ARG }
     cOutLen := C.word32(len(priv))
     return int(C.wc_curve25519_export_private_raw(key, (*C.uchar)(unsafe.Pointer(&priv[0])), &cOutLen))
+}
+
+const EC25519_LITTLE_ENDIAN = int(C.EC25519_LITTLE_ENDIAN)
+const EC25519_BIG_ENDIAN = int(C.EC25519_BIG_ENDIAN)
+
+// Wc_curve25519_export_private_raw_ex writes the private scalar in the given
+// byte order; EC25519_LITTLE_ENDIAN (RFC 7748) matches the import functions.
+func Wc_curve25519_export_private_raw_ex(key *C.struct_curve25519_key, priv []byte, endian int) int {
+    if len(priv) == 0 { return BAD_FUNC_ARG }
+    if endian != EC25519_LITTLE_ENDIAN && endian != EC25519_BIG_ENDIAN { return BAD_FUNC_ARG }
+    if int(C.word32(len(priv))) != len(priv) { return BAD_FUNC_ARG }
+    cOutLen := C.word32(len(priv))
+    return int(C.wc_curve25519_export_private_raw_ex(key, (*C.uchar)(unsafe.Pointer(&priv[0])),
+               &cOutLen, C.int(endian)))
 }
 
 func Wc_curve25519_shared_secret(privKey, pubKey *C.struct_curve25519_key, out []byte) int {

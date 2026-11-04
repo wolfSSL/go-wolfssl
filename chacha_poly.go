@@ -120,18 +120,26 @@ func Wc_ChaCha20Poly1305_Decrypt(inKey, inIv, inAAD, inCipher, inAuthTag , outPl
                (*C.uchar)(unsafe.Pointer(&inAuthTag[0])), sanOutPlain))
 }
 
+// Wc_ChaCha20Poly1305_Appended_Tag_Encrypt encrypts inPlain and appends the
+// 16-byte tag, returning a slice of length exactly
+// len(inPlain)+CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE. If outCipher is large
+// enough it is used as backing storage; otherwise a new slice is allocated.
 func Wc_ChaCha20Poly1305_Appended_Tag_Encrypt(inKey, inIv, inAAD, inPlain, outCipher []byte) ([]byte, int) {
     var outAuthTag [CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE]byte
     var longOutCipher []byte
 
-    if len(outCipher) < (len(inPlain) + CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE) {
-        longOutCipher = make([]byte, len(inPlain) + CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)
+    need := len(inPlain) + CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE
+    if len(outCipher) < need {
+        longOutCipher = make([]byte, need)
     } else {
-        longOutCipher = outCipher
+        // Reslice to `need` so the returned cipher||tag has no gap when
+        // outCipher is oversized; reverting this re-introduces uninitialized
+        // bytes between ciphertext and tag.
+        longOutCipher = outCipher[:need]
     }
 
-    ret := Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, longOutCipher[:(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)], outAuthTag[:])
-    copy(longOutCipher[(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE):], outAuthTag[:])
+    ret := Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, longOutCipher[:len(inPlain)], outAuthTag[:])
+    copy(longOutCipher[len(inPlain):], outAuthTag[:])
     return longOutCipher, ret
 }
 

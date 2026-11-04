@@ -1,0 +1,88 @@
+name: Fuzz
+run-name: ${{ inputs.nightly_id && format('Nightly {0}', inputs.nightly_id) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
+
+# Seed corpora run with every go test in the config matrix; this workflow
+# does the long coverage-guided runs, dispatched nightly.
+on:
+  workflow_dispatch:
+    inputs:
+      nightly_id:
+        description: Set by the nightly dispatcher to identify its runs
+        type: string
+        default: ''
+      fuzztime:
+        description: How long to fuzz each target (Go duration)
+        type: string
+        default: 10m
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.nightly_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -e {0}
+
+jobs:
+  discover:
+    if: github.repository_owner == 'wolfssl'
+    uses: ./.github/workflows/_resolve-wolfssl.yml
+
+  fuzz:
+    name: ${{ matrix.target }} (${{ matrix.pkg }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/wolfssl/go-wolfssl-ci@sha256:243df6018d71ed9b47be8cb4c0472b1ad626b5fe583683686c72134115225003
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ., target: FuzzX509DER }
+          - { pkg: ., target: FuzzX509PEM }
+          - { pkg: ., target: FuzzRsaPrivateKeyDecode }
+          - { pkg: ./wolfx509, target: FuzzParseCertificate }
+          - { pkg: ./wolfx509, target: FuzzParseCertificates }
+          - { pkg: ./wolfx509, target: FuzzVerify }
+          - { pkg: ./handles, target: FuzzParseECPrivateKeyDER }
+          - { pkg: ./handles, target: FuzzParsePKCS8ECPrivateKeyDER }
+          - { pkg: ./handles, target: FuzzParseECPrivateKeyPEM }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: wolfSSL configure flags
+        id: flags
+        run: echo "flags=$(.github/scripts/run-config.sh flags all)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-wolfssl
+        with:
+          ref: ${{ needs.discover.outputs.latest_stable }}
+          configure-flags: ${{ steps.flags.outputs.flags }}
+          prefix: /tmp/wolfssl-install
+
+      - uses: ./.github/actions/setup-go-wolfssl
+
+      - name: Fuzz
+        env:
+          PKG: ${{ matrix.pkg }}
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+        run: |
+          ./generateOptions.sh /tmp/wolfssl-install
+          export LD_LIBRARY_PATH=/tmp/wolfssl-install/lib
+          go test -run '^$' -fuzz "^${TARGET}\$" -fuzztime "$FUZZTIME" "$PKG"
+
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: '**/testdata/fuzz/${{ matrix.target }}/'
+          retention-days: 30

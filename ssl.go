@@ -110,6 +110,10 @@ package wolfSSL
 // }
 // #endif
 // #ifndef HAVE_ALPN
+// enum {
+//     WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 2,
+//     WOLFSSL_ALPN_FAILED_ON_MISMATCH = 4
+// };
 // int wolfSSL_UseALPN(WOLFSSL* ssl, char* protocol_name_list,
 //                     unsigned int protocol_name_listSz, unsigned char options) {
 //      (void)ssl; (void)protocol_name_list; (void)protocol_name_listSz;
@@ -129,6 +133,7 @@ package wolfSSL
 // #endif
 import "C"
 import (
+    "math"
     "unsafe"
 )
 
@@ -214,12 +219,14 @@ func WolfDTLSv1_3_client_method() *C.struct_WOLFSSL_METHOD {
 }
 
 func WolfSSL_dtls_create_peer(port int, ip string) unsafe.Pointer {
+    if wrapperStringHasNUL(ip) { return nil }
     c_ip := C.CString(ip)
     defer C.free(unsafe.Pointer(c_ip))
     return C.wolfSSL_dtls_create_peer(C.int(port), c_ip)
 }
 
 func WolfSSL_dtls_set_peer(ssl *C.struct_WOLFSSL, addr unsafe.Pointer, peerSz int) int {
+    if peerSz < 0 || uint64(peerSz) > math.MaxUint32 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_dtls_set_peer(ssl, addr, C.uint(peerSz)))
 }
 
@@ -244,6 +251,7 @@ func WolfSSL_CTX_set_psk_client_tls13_callback(ctx *C.struct_WOLFSSL_CTX, cb uns
 }
 
 func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) int {
+    if wrapperStringHasNUL(hint) { return BAD_FUNC_ARG }
     c_hint := C.CString(hint)
     defer C.free(unsafe.Pointer(c_hint))
     return int(C.wolfSSL_CTX_use_psk_identity_hint(ctx, c_hint))
@@ -251,15 +259,24 @@ func WolfSSL_CTX_use_psk_identity_hint(ctx *C.struct_WOLFSSL_CTX, hint string) i
 
 func WolfSSL_CTX_load_verify_locations(ctx *C.struct_WOLFSSL_CTX, cert string,
                                        path []byte) int {
-    cert_file := C.CString(cert)
-    defer C.free(unsafe.Pointer(cert_file))
-    /* TODO: HANDLE NON NIL PATH */
-    return int(C.wolfSSL_CTX_load_verify_locations(ctx, cert_file,
-               (*C.char)(unsafe.Pointer(nil))))
+    if wrapperStringHasNUL(cert) || wrapperStringHasNUL(string(path)) {
+        return BAD_FUNC_ARG
+    }
+    var cert_file, cert_path *C.char
+    if cert != "" {
+        cert_file = C.CString(cert)
+        defer C.free(unsafe.Pointer(cert_file))
+    }
+    if len(path) > 0 {
+        cert_path = C.CString(string(path))
+        defer C.free(unsafe.Pointer(cert_path))
+    }
+    return int(C.wolfSSL_CTX_load_verify_locations(ctx, cert_file, cert_path))
 }
 
 func WolfSSL_CTX_use_certificate_file(ctx *C.struct_WOLFSSL_CTX, cert string,
                                       format int) int {
+    if wrapperStringHasNUL(cert) { return BAD_FUNC_ARG }
     cert_file := C.CString(cert)
     defer C.free(unsafe.Pointer(cert_file))
     return int(C.wolfSSL_CTX_use_certificate_file(ctx, cert_file, C.int(format)))
@@ -267,6 +284,7 @@ func WolfSSL_CTX_use_certificate_file(ctx *C.struct_WOLFSSL_CTX, cert string,
 
 func WolfSSL_CTX_use_PrivateKey_file(ctx *C.struct_WOLFSSL_CTX, key string,
                                      format int) int {
+    if wrapperStringHasNUL(key) { return BAD_FUNC_ARG }
     key_file := C.CString(key)
     defer C.free(unsafe.Pointer(key_file))
     return int(C.wolfSSL_CTX_use_PrivateKey_file(ctx, key_file, C.int(format)))
@@ -336,8 +354,8 @@ const SSL_VERIFY_CLIENT_ONCE = 4
 const WOLFSSL_SNI_HOST_NAME = 0
 
 /* ALPN option constants */
-const WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 1
-const WOLFSSL_ALPN_FAILED_ON_MISMATCH = 2
+const WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = C.WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+const WOLFSSL_ALPN_FAILED_ON_MISMATCH = C.WOLFSSL_ALPN_FAILED_ON_MISMATCH
 
 func WolfSSLv23_client_method() *C.struct_WOLFSSL_METHOD {
     return C.wolfSSLv23_client_method()
@@ -390,23 +408,27 @@ func WolfSSL_CTX_use_PrivateKey_buffer(ctx *C.struct_WOLFSSL_CTX, buf []byte,
 
 func WolfSSL_UseSNI(ssl *C.struct_WOLFSSL, sniType int, data []byte, size int) int {
     if size <= 0 || size > len(data) || len(data) == 0 { return BAD_FUNC_ARG }
+    if size > math.MaxUint16 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_UseSNI(ssl, C.uchar(sniType),
                unsafe.Pointer(&data[0]), C.ushort(size)))
 }
 
 func WolfSSL_CTX_UseSNI(ctx *C.struct_WOLFSSL_CTX, sniType int, data []byte, size int) int {
     if size <= 0 || size > len(data) || len(data) == 0 { return BAD_FUNC_ARG }
+    if size > math.MaxUint16 { return BAD_FUNC_ARG }
     return int(C.wolfSSL_CTX_UseSNI(ctx, C.uchar(sniType),
                unsafe.Pointer(&data[0]), C.ushort(size)))
 }
 
 func WolfSSL_check_domain_name(ssl *C.struct_WOLFSSL, dn string) int {
+    if wrapperStringHasNUL(dn) { return BAD_FUNC_ARG }
     cDN := C.CString(dn)
     defer C.free(unsafe.Pointer(cDN))
     return int(C.wolfSSL_check_domain_name(ssl, cDN))
 }
 
 func WolfSSL_UseALPN(ssl *C.struct_WOLFSSL, protoList string, options int) int {
+    if uint64(len(protoList)) > math.MaxUint32 { return BAD_FUNC_ARG }
     c_list := C.CString(protoList)
     defer C.free(unsafe.Pointer(c_list))
     return int(C.wolfSSL_UseALPN(ssl, c_list, C.uint(len(protoList)), C.uchar(options)))
@@ -462,7 +484,12 @@ func WolfSSL_get_chain_count(chain *C.WOLFSSL_X509_CHAIN) int {
     return int(C.wolfSSL_get_chain_count(chain))
 }
 
+func wrapperChainIndexValid(chain *C.WOLFSSL_X509_CHAIN, idx int) bool {
+    return chain != nil && idx >= 0 && idx < int(C.wolfSSL_get_chain_count(chain))
+}
+
 func WolfSSL_get_chain_cert(chain *C.WOLFSSL_X509_CHAIN, idx int) []byte {
+    if !wrapperChainIndexValid(chain, idx) { return nil }
     length := int(C.wolfSSL_get_chain_length(chain, C.int(idx)))
     if length <= 0 { return nil }
     ptr := C.wolfSSL_get_chain_cert(chain, C.int(idx))
@@ -471,6 +498,7 @@ func WolfSSL_get_chain_cert(chain *C.WOLFSSL_X509_CHAIN, idx int) []byte {
 }
 
 func WolfSSL_get_chain_length(chain *C.WOLFSSL_X509_CHAIN, idx int) int {
+    if !wrapperChainIndexValid(chain, idx) { return 0 }
     return int(C.wolfSSL_get_chain_length(chain, C.int(idx)))
 }
 
@@ -524,15 +552,15 @@ func WolfSSL_get_peer_cert_chain_DER(ssl *WOLFSSL) [][]byte {
     chain := C.wolfSSL_get_peer_chain(ssl)
     if chain != nil {
         count := int(C.wolfSSL_get_chain_count(chain))
-        for i := 0; i < count; i++ {
+        certs = wrapperCollectChainDER(count, func(i int) []byte {
             length := int(C.wolfSSL_get_chain_length(chain, C.int(i)))
-            if length <= 0 { continue }
+            if length <= 0 { return nil }
             // wolfSSL_get_chain_cert returns an internal pointer — copy now.
             ptr := C.wolfSSL_get_chain_cert(chain, C.int(i))
-            if ptr == nil { continue }
-            certs = append(certs, C.GoBytes(unsafe.Pointer(ptr), C.int(length)))
-        }
-        if len(certs) > 0 {
+            if ptr == nil { return nil }
+            return C.GoBytes(unsafe.Pointer(ptr), C.int(length))
+        })
+        if count > 0 {
             return certs
         }
     }
@@ -556,12 +584,12 @@ func WolfSSL_get_peer_cert_chain_DER(ssl *WOLFSSL) [][]byte {
     return [][]byte{C.GoBytes(unsafe.Pointer(derPtr), outSz)}
 }
 
-/* Protocol version constants matching wolfSSL's internal values. */
+/* Protocol versions accepted by WolfSSL_CTX_set_min/max_proto_version. */
 const (
-    WOLFSSL_TLSV1   = 1
-    WOLFSSL_TLSV1_1 = 2
-    WOLFSSL_TLSV1_2 = 3
-    WOLFSSL_TLSV1_3 = 4
+    WOLFSSL_TLSV1   = C.TLS1_VERSION
+    WOLFSSL_TLSV1_1 = C.TLS1_1_VERSION
+    WOLFSSL_TLSV1_2 = C.TLS1_2_VERSION
+    WOLFSSL_TLSV1_3 = C.TLS1_3_VERSION
 )
 
 func WolfSSL_CTX_set_min_proto_version(ctx *WOLFSSL_CTX, ver int) int {

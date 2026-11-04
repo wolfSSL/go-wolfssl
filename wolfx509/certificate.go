@@ -166,11 +166,12 @@ func ParseCertificate(der []byte) (*Certificate, error) {
 		NotAfter:  notAfter,
 	}
 
-	if s := wolfSSL.WolfSSL_X509_get_serial_bytes(x); len(s) > 0 {
-		c.SerialNumber = new(big.Int).SetBytes(s)
-	} else {
-		c.SerialNumber = new(big.Int)
+	s := wolfSSL.WolfSSL_X509_get_serial_bytes(x)
+	if len(s) == 0 {
+		wolfSSL.WolfSSL_X509_free(x)
+		return nil, fmt.Errorf("%w: serial number unavailable", ErrInvalidCert)
 	}
+	c.SerialNumber = new(big.Int).SetBytes(s)
 
 	// AKI keyIdentifier — used by ACME ARI's {AKI}.{Serial} renewal
 	// identifier (draft-ietf-acme-ari). Absent for self-signed leaves

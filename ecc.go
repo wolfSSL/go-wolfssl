@@ -102,6 +102,25 @@ package wolfSSL
 //      return -174;
 //  }
 // #endif
+// #if defined(HAVE_ECC) && !defined(HAVE_PKCS8)
+// int wc_EccKeyToPKCS8(ecc_key* key, byte* output, word32* outLen) {
+//      (void)key; (void)output; (void)outLen;
+//      return -174;
+//  }
+// #endif
+// #ifndef HAVE_PKCS8
+// int wc_GetPkcs8TraditionalOffset(byte* input, word32* inOutIdx, word32 sz) {
+//      (void)input; (void)inOutIdx; (void)sz;
+//      return -174;
+//  }
+// #endif
+// #ifndef WOLFSSL_PEM_TO_DER
+// int wc_KeyPemToDer(const unsigned char* pem, int pemSz, unsigned char* buff,
+//                    int buffSz, const char* pass) {
+//      (void)pem; (void)pemSz; (void)buff; (void)buffSz; (void)pass;
+//      return -174;
+//  }
+// #endif
 //
 // /* Negate an ECC private key: d' = order - d, then regenerate the public key */
 // #if defined(HAVE_ECC) && defined(WOLFSSL_PUBLIC_MP)

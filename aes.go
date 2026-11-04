@@ -29,6 +29,7 @@ package wolfSSL
 // #ifdef NO_AES
 // #define AES_BLOCK_SIZE   1
 // #define AES_IV_SIZE      1
+// #define GCM_NONCE_MID_SZ 12
 // #define AES_128_KEY_SIZE 1
 // #define AES_192_KEY_SIZE 1
 // #define AES_256_KEY_SIZE 1

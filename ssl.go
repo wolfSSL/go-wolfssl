@@ -42,12 +42,25 @@ package wolfSSL
 // static int ssl_SNI_GetRequest(WOLFSSL* ssl, char* out, int outSz) {
 //     (void)ssl; (void)out; (void)outSz; return 0;
 // }
+// int wolfSSL_UseSNI(WOLFSSL* ssl, unsigned char type, const void* data,
+//                    unsigned short size) {
+//     (void)ssl; (void)type; (void)data; (void)size; return -174;
+// }
+// int wolfSSL_CTX_UseSNI(WOLFSSL_CTX* ctx, unsigned char type,
+//                        const void* data, unsigned short size) {
+//     (void)ctx; (void)type; (void)data; (void)size; return -174;
+// }
 // #endif
 // #ifdef OPENSSL_ALL
 // #include <wolfssl/openssl/x509.h>
 // #endif
 // #if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_ALL)
 // void wolfSSL_OPENSSL_free(void* p) { free(p); }
+// #endif
+// /* Same condition under which libwolfssl omits wolfSSL_X509_free. */
+// #if !defined(KEEP_PEER_CERT) && !defined(SESSION_CERTS) && \
+//     !defined(KEEP_OUR_CERT) && !defined(OPENSSL_EXTRA) && \
+//     !defined(OPENSSL_EXTRA_X509_SMALL) && !defined(OPENSSL_ALL)
 // void wolfSSL_X509_free(WOLFSSL_X509* x509) { (void)x509; }
 // #endif
 // #ifdef NO_PSK

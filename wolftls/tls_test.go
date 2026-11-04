@@ -29,6 +29,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -1039,6 +1040,9 @@ func TestALPN(t *testing.T) {
 	defer tlsConn.Close()
 
 	if err := tlsConn.Handshake(); err != nil {
+		if errors.Is(err, ErrNotCompiledIn) {
+			t.Skip("ALPN not compiled in")
+		}
 		t.Fatalf("handshake: %v", err)
 	}
 

@@ -1,6 +1,5 @@
-name: Go Lint and Vet
+name: Linters
 
-# START OF COMMON SECTION
 on:
   push:
     branches: [ 'master', 'main', 'release/**' ]
@@ -10,21 +9,15 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-# END OF COMMON SECTION
 
 jobs:
-  go_vet:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-24.04 ]
-        wolfssl_configure: [
-          '--enable-all --enable-opensslall --enable-opensslextra',
-        ]
-    name: ${{ matrix.os }} go vet
+  # go vet and staticcheck need cgo to resolve wolfSSL types/symbols. examples/
+  # is excluded because it contains multiple `package main` files per directory
+  # and would produce false-positive redeclaration errors at package level.
+  vet_and_staticcheck:
+    name: go vet + staticcheck
     if: github.repository_owner == 'wolfssl'
-    runs-on: ${{ matrix.os }}
-    # This should be a safe limit for the tests to run.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/wolfssl-install
-          key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/lint.yml') }}
+          key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/linters.yml') }}-enable-all
 
       - name: Build native wolfSSL
         if: steps.cache-wolfssl.outputs.cache-hit != 'true'
@@ -50,7 +43,7 @@ jobs:
           git clone --depth 1 https://github.com/wolfSSL/wolfssl.git /tmp/wolfssl
           cd /tmp/wolfssl
           ./autogen.sh
-          ./configure --prefix=/tmp/wolfssl-install ${{ matrix.wolfssl_configure }}
+          ./configure --prefix=/tmp/wolfssl-install --enable-all --enable-opensslall --enable-opensslextra
           make -j$(nproc)
           make install
 
@@ -60,13 +53,18 @@ jobs:
           sudo cp -r /tmp/wolfssl-install/include/* /usr/local/include/
           sudo ldconfig
 
-      - name: Install Go dependencies
-        run: |
-          go get golang.org/x/term
-          go mod tidy
+      - name: Build
+        run: go build . ./handles ./wolftls ./wolfx509
 
       - name: Run go vet
-        run: go vet .
+        # wolftls is excluded for a pre-existing unsafe.Pointer(uintptr) pattern
+        # that's a separate cleanup ticket.
+        run: go vet . ./handles ./wolfx509
 
-      - name: Check build
-        run: go build .
+      - name: Install staticcheck
+        # v0.6.1 is the last release that supports Go 1.21–1.24 natively;
+        # pinning avoids a silent toolchain auto-upgrade to Go 1.25.
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+
+      - name: Run staticcheck
+        run: $(go env GOPATH)/bin/staticcheck . ./handles ./wolfx509

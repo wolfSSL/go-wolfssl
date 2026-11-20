@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,6 +36,34 @@ import (
 )
 
 const lifecycleTimeout = 5 * time.Second
+
+func skipExactWriteCountOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cancels a timed-out overlapped WSASend without reporting bytes already sent, so Write counts are not exact")
+	}
+}
+
+func drainPostHandshake(t *testing.T, cli, srv *Conn) {
+	t.Helper()
+	if _, err := srv.Write([]byte("x")); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(cli, make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("client read: %v", err)
+		}
+	case <-time.After(lifecycleTimeout):
+		t.Fatal("client read of the server's byte never returned")
+	}
+}
 
 // notifyConn reports each transport Read made while armed.
 type notifyConn struct {
@@ -218,13 +247,7 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 		})
 		defer cleanup()
 		// Drain post-handshake messages so closing the transport is a clean FIN.
-		if _, err := srv.Write([]byte("x")); err != nil {
-			t.Fatalf("server write: %v", err)
-		}
-		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
-		if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
-			t.Fatalf("client read: %v", err)
-		}
+		drainPostHandshake(t, cli, srv)
 
 		msg := make([]byte, 100)
 		atomic.StoreInt32(&pc.writePanics, 3)
@@ -255,13 +278,7 @@ func TestCallbackPanicBecomesError(t *testing.T) {
 		})
 		defer cleanup()
 		// Drain post-handshake messages so closing the transport is a clean FIN.
-		if _, err := srv.Write([]byte("x")); err != nil {
-			t.Fatalf("server write: %v", err)
-		}
-		cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
-		if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
-			t.Fatalf("client read: %v", err)
-		}
+		drainPostHandshake(t, cli, srv)
 
 		atomic.StoreInt32(&pc.readPanics, 2)
 		defer atomic.StoreInt32(&pc.readPanics, 0)
@@ -498,15 +515,9 @@ func TestSharedSessionInputPumpTakesTurns(t *testing.T) {
 		t.Skip("write dup splits the session; no shared input pump")
 	}
 	rc := cli.conn.(*recordingConn)
-	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
 
 	// Drain post-handshake messages, then park a Read in the pump.
-	if _, err := srv.Write([]byte("x")); err != nil {
-		t.Fatalf("server write: %v", err)
-	}
-	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
-		t.Fatalf("client read: %v", err)
-	}
+	drainPostHandshake(t, cli, srv)
 	for len(rcnt.entered) > 0 {
 		<-rcnt.entered
 	}
@@ -580,13 +591,7 @@ func TestReadAfterWriteTimeoutSendsNothing(t *testing.T) {
 
 	// Consume post-handshake messages so closing the client does not reset
 	// the connection and discard what the server has yet to read.
-	if _, err := srv.Write([]byte("x")); err != nil {
-		t.Fatalf("server write: %v", err)
-	}
-	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
-	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
-		t.Fatalf("client read: %v", err)
-	}
+	drainPostHandshake(t, cli, srv)
 
 	const chunk = 16384
 	var want []byte
@@ -640,6 +645,7 @@ func TestReadAfterWriteTimeoutSendsNothing(t *testing.T) {
 	if !bytes.Equal(r.got, want) {
 		t.Fatal("server stream differs from the bytes Write reported as written")
 	}
+	skipExactWriteCountOnWindows(t)
 	if r.extra != 0 {
 		t.Fatal("server received plaintext that Write reported as unsent")
 	}
@@ -651,13 +657,7 @@ func TestLargeWriteTimeoutReportsDeliveredBytes(t *testing.T) {
 
 	// Consume post-handshake messages so closing the client does not reset
 	// the connection and discard what the server has yet to read.
-	if _, err := srv.Write([]byte("x")); err != nil {
-		t.Fatalf("server write: %v", err)
-	}
-	cli.SetReadDeadline(time.Now().Add(lifecycleTimeout))
-	if _, err := io.ReadFull(cli, make([]byte, 1)); err != nil {
-		t.Fatalf("client read: %v", err)
-	}
+	drainPostHandshake(t, cli, srv)
 
 	big := make([]byte, 64<<20)
 	for i := range big {
@@ -681,6 +681,7 @@ func TestLargeWriteTimeoutReportsDeliveredBytes(t *testing.T) {
 	if !bytes.Equal(got, big[:n]) {
 		t.Fatal("server stream differs from the bytes Write reported as written")
 	}
+	skipExactWriteCountOnWindows(t)
 	if m, err := srv.Read(make([]byte, 1)); m != 0 || err == nil {
 		t.Fatalf("server received bytes beyond the %d Write reported (m=%d err=%v)", n, m, err)
 	}
@@ -778,6 +779,7 @@ func TestWriteTimeoutKeepsStreamConsistent(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("server stream differs from the bytes Write reported as written")
 	}
+	skipExactWriteCountOnWindows(t)
 	if n, err := srv.Read(make([]byte, 1)); n != 0 || err == nil || err == io.EOF {
 		t.Fatalf("after the reported bytes: n=%d err=%v, want a truncation error", n, err)
 	}
@@ -978,6 +980,7 @@ func TestCloseUnblocksReadWithoutDeadlines(t *testing.T) {
 func TestIdleCloseWithoutDeadlinesSendsCloseNotify(t *testing.T) {
 	cli, srv, cleanup := setupPairWith(t, func(c net.Conn) net.Conn { return deadlineFreeConn{c} })
 	defer cleanup()
+	drainPostHandshake(t, cli, srv)
 	if err := cli.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

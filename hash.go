@@ -66,7 +66,7 @@ const WC_SHA512_DIGEST_SIZE = int(C.WC_SHA512_DIGEST_SIZE)
 const WC_SHA256 = int(C.WC_SHA256)
 
 func Wc_Md5Hash(input []byte, inputSz int, output []byte) int {
-    if inputSz < 0 || inputSz > len(input) { return BAD_FUNC_ARG }
+    if inputSz < 0 || inputSz > len(input) || !wolfcryptFitsWord32(inputSz) { return BAD_FUNC_ARG }
     if len(output) < WC_MD5_DIGEST_SIZE { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(input) > 0 {
@@ -77,7 +77,7 @@ func Wc_Md5Hash(input []byte, inputSz int, output []byte) int {
 }
 
 func Wc_ShaHash(input []byte, inputSz int, output []byte) int {
-    if inputSz < 0 || inputSz > len(input) { return BAD_FUNC_ARG }
+    if inputSz < 0 || inputSz > len(input) || !wolfcryptFitsWord32(inputSz) { return BAD_FUNC_ARG }
     if len(output) < WC_SHA_DIGEST_SIZE { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(input) > 0 {
@@ -88,7 +88,7 @@ func Wc_ShaHash(input []byte, inputSz int, output []byte) int {
 }
 
 func Wc_Sha256Hash(input []byte, inputSz int, output []byte) int {
-    if inputSz < 0 || inputSz > len(input) { return BAD_FUNC_ARG }
+    if inputSz < 0 || inputSz > len(input) || !wolfcryptFitsWord32(inputSz) { return BAD_FUNC_ARG }
     if len(output) < WC_SHA256_DIGEST_SIZE { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(input) > 0 {
@@ -99,7 +99,7 @@ func Wc_Sha256Hash(input []byte, inputSz int, output []byte) int {
 }
 
 func Wc_Sha384Hash(input []byte, inputSz int, output []byte) int {
-    if inputSz < 0 || inputSz > len(input) { return BAD_FUNC_ARG }
+    if inputSz < 0 || inputSz > len(input) || !wolfcryptFitsWord32(inputSz) { return BAD_FUNC_ARG }
     if len(output) < WC_SHA384_DIGEST_SIZE { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(input) > 0 {
@@ -110,7 +110,7 @@ func Wc_Sha384Hash(input []byte, inputSz int, output []byte) int {
 }
 
 func Wc_Sha512Hash(input []byte, inputSz int, output []byte) int {
-    if inputSz < 0 || inputSz > len(input) { return BAD_FUNC_ARG }
+    if inputSz < 0 || inputSz > len(input) || !wolfcryptFitsWord32(inputSz) { return BAD_FUNC_ARG }
     if len(output) < WC_SHA512_DIGEST_SIZE { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(input) > 0 {

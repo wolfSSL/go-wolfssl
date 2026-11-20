@@ -23,10 +23,10 @@ package wolfSSL
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/chacha20_poly1305.h>
 // #ifndef HAVE_CHACHA
-// #define CHACHA20_POLY1305_AEAD_KEYSIZE 1
-// #define CHACHA20_POLY1305_AEAD_IV_SIZE 1
-// #define CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE 1
-// #define XCHACHA20_POLY1305_AEAD_NONCE_SIZE  1
+// #define CHACHA20_POLY1305_AEAD_KEYSIZE 32
+// #define CHACHA20_POLY1305_AEAD_IV_SIZE 12
+// #define CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE 16
+// #define XCHACHA20_POLY1305_AEAD_NONCE_SIZE  24
 // int wc_ChaCha20Poly1305_Encrypt(
 //                 byte inKey[CHACHA20_POLY1305_AEAD_KEYSIZE],
 //                 byte inIV[CHACHA20_POLY1305_AEAD_IV_SIZE],
@@ -76,10 +76,11 @@ const XCHACHA20_POLY1305_AEAD_NONCE_SIZE = int(C.XCHACHA20_POLY1305_AEAD_NONCE_S
 const CHACHA20_POLY1305_AEAD_NONCE_SIZE = XCHACHA20_POLY1305_AEAD_NONCE_SIZE/2
 
 func Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, outCipher, outAuthTag []byte) int {
-    if len(inKey) < CHACHA20_POLY1305_AEAD_KEYSIZE { return BAD_FUNC_ARG }
-    if len(inIv) < CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
+    if len(inKey) != CHACHA20_POLY1305_AEAD_KEYSIZE { return BAD_FUNC_ARG }
+    if len(inIv) != CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
     if len(outAuthTag) < CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE { return BAD_FUNC_ARG }
     if len(outCipher) < len(inPlain) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inAAD)) || !wolfcryptFitsWord32(len(inPlain)) { return BAD_FUNC_ARG }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -98,10 +99,11 @@ func Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, outCipher, outAuth
 }
 
 func Wc_ChaCha20Poly1305_Decrypt(inKey, inIv, inAAD, inCipher, inAuthTag , outPlain []byte) int {
-    if len(inKey) < CHACHA20_POLY1305_AEAD_KEYSIZE { return BAD_FUNC_ARG }
-    if len(inIv) < CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
+    if len(inKey) != CHACHA20_POLY1305_AEAD_KEYSIZE { return BAD_FUNC_ARG }
+    if len(inIv) != CHACHA20_POLY1305_AEAD_IV_SIZE { return BAD_FUNC_ARG }
     if len(inAuthTag) < CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE { return BAD_FUNC_ARG }
     if len(outPlain) < len(inCipher) { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(len(inAAD)) || !wolfcryptFitsWord32(len(inCipher)) { return BAD_FUNC_ARG }
     var sanInAAD *C.uchar
     if len(inAAD) > 0 {
         sanInAAD = (*C.uchar)(unsafe.Pointer(&inAAD[0]))
@@ -131,6 +133,9 @@ func Wc_ChaCha20Poly1305_Appended_Tag_Encrypt(inKey, inIv, inAAD, inPlain, outCi
     }
 
     ret := Wc_ChaCha20Poly1305_Encrypt(inKey, inIv, inAAD, inPlain, longOutCipher[:(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE)], outAuthTag[:])
+    if ret != 0 {
+        return nil, ret
+    }
     copy(longOutCipher[(len(longOutCipher)-CHACHA20_POLY1305_AEAD_AUTHTAG_SIZE):], outAuthTag[:])
     return longOutCipher, ret
 }

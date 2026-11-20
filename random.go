@@ -55,7 +55,7 @@ func Wc_FreeRng(rng *C.struct_WC_RNG) int {
 }
 
 func Wc_RNG_GenerateBlock(rng *C.struct_WC_RNG, b []byte, sz int) int {
-    if sz < 0 || sz > len(b) { return BAD_FUNC_ARG }
+    if sz < 0 || sz > len(b) || !wolfcryptFitsWord32(sz) { return BAD_FUNC_ARG }
     if sz == 0 { return 0 }
     return int(C.wc_RNG_GenerateBlock(rng, (*C.uchar)(unsafe.Pointer(&b[0])),
                C.word32(sz)))

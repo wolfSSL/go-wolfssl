@@ -22,6 +22,7 @@ package wolfSSL
 
 // #include <wolfssl/options.h>
 // #include <wolfssl/wolfcrypt/hmac.h>
+// #include <wolfssl/wolfcrypt/error-crypt.h>
 // #ifdef _WIN32
 // #include <stdlib.h>
 // #include <malloc.h>
@@ -45,17 +46,31 @@ package wolfSSL
 //     free(ptr);
 // }
 // #endif
+// int wc_go_PrivateKeyUnlock(void);
+// int wc_go_PrivateKeyLock(void);
 // /* unlock/op/lock must stay inside one cgo call; see fips.go */
 // static int wc_HKDF_Unlocked(int type, const byte* inKey, word32 inKeySz,
 //                             const byte* salt, word32 saltSz,
 //                             const byte* info, word32 infoSz,
 //                             byte* out, word32 outSz)
 // {
+// #ifdef HAVE_HKDF
 //     int ret;
-//     PRIVATE_KEY_UNLOCK();
-//     ret = wc_HKDF(type, inKey, inKeySz, salt, saltSz, info, infoSz, out, outSz);
-//     PRIVATE_KEY_LOCK();
+//     int lockRet;
+//     ret = wc_go_PrivateKeyUnlock();
+//     if (ret == 0) {
+//         ret = wc_HKDF(type, inKey, inKeySz, salt, saltSz, info, infoSz,
+//                       out, outSz);
+//         lockRet = wc_go_PrivateKeyLock();
+//         if (ret == 0)
+//             ret = lockRet;
+//     }
 //     return ret;
+// #else
+//     (void)type; (void)inKey; (void)inKeySz; (void)salt; (void)saltSz;
+//     (void)info; (void)infoSz; (void)out; (void)outSz;
+//     return NOT_COMPILED_IN;
+// #endif
 // }
 import "C"
 import (
@@ -82,7 +97,7 @@ func Wc_HmacFree(hmac *C.struct_Hmac) {
 }
 
 func Wc_HmacSetKey(hmac *C.struct_Hmac, hash int, key []byte, keySz int) int {
-    if keySz < 0 || keySz > len(key) { return BAD_FUNC_ARG }
+    if keySz < 0 || keySz > len(key) || !wolfcryptFitsWord32(keySz) { return BAD_FUNC_ARG }
     var sanKey *C.uchar
     if len(key) > 0 {
         sanKey = (*C.uchar)(unsafe.Pointer(&key[0]))
@@ -93,7 +108,7 @@ func Wc_HmacSetKey(hmac *C.struct_Hmac, hash int, key []byte, keySz int) int {
 }
 
 func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
-    if inSz < 0 || inSz > len(in) { return BAD_FUNC_ARG }
+    if inSz < 0 || inSz > len(in) || !wolfcryptFitsWord32(inSz) { return BAD_FUNC_ARG }
     var sanIn *C.uchar
     if len(in) > 0 {
         sanIn = (*C.uchar)(unsafe.Pointer(&in[0]))
@@ -105,7 +120,9 @@ func Wc_HmacUpdate(hmac *C.struct_Hmac, in []byte, inSz int) int {
 }
 
 func Wc_HmacFinal(hmac *C.struct_Hmac, out []byte) int {
-    if len(out) == 0 { return BAD_FUNC_ARG }
+    if hmac == nil || len(out) == 0 { return BAD_FUNC_ARG }
+    digestSz := int(C.wc_HmacSizeByType(C.int(hmac.macType)))
+    if digestSz <= 0 || len(out) < digestSz { return BAD_FUNC_ARG }
     return int(C.wc_HmacFinal(hmac, (*C.uchar)(unsafe.Pointer(&out[0]))))
 }
 
@@ -116,6 +133,10 @@ func Wc_HKDF(hashType int, inputKey []byte, inputKeySz int, salt []byte,
     if infoSz < 0 || infoSz > len(info) { return BAD_FUNC_ARG }
     if outSz < 0 || outSz > len(out) { return BAD_FUNC_ARG }
     if len(out) == 0 { return BAD_FUNC_ARG }
+    if !wolfcryptFitsWord32(inputKeySz) || !wolfcryptFitsWord32(saltSz) ||
+       !wolfcryptFitsWord32(infoSz) || !wolfcryptFitsWord32(outSz) {
+        return BAD_FUNC_ARG
+    }
     // RFC 5869 permits a zero-length IKM (the Noise protocol's final
     // Split() step relies on this, passing ck as salt and "" as IKM).
     // Pass a NULL pointer to wolfCrypt rather than indexing an empty slice.

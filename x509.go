@@ -90,8 +90,8 @@ package wolfSSL
 //     return len;
 // }
 // /* Extract the keyIdentifier bytes from the AuthorityKeyIdentifier
-//  * extension (RFC 5280 §4.2.1.1). Returns the length copied or 0 if
-//  * the extension is absent. */
+//  * extension (RFC 5280 §4.2.1.1). Returns the length copied, 0 if
+//  * absent, or the required length (> outSz) without copying. */
 // static int wolfx509_get_authority_key_id(WOLFSSL_X509* x, unsigned char* out, int outSz) {
 //     if (x == NULL) return 0;
 //     WOLFSSL_AUTHORITY_KEYID* akid = (WOLFSSL_AUTHORITY_KEYID*)wolfSSL_X509_get_ext_d2i(
@@ -107,6 +107,9 @@ package wolfSSL
 //         int len = (int)akid->issuer->objSz;
 //         if (len > 0 && len <= outSz) {
 //             memcpy(out, akid->issuer->obj, len);
+//             n = len;
+//         }
+//         else if (len > outSz) {
 //             n = len;
 //         }
 //     }
@@ -189,12 +192,18 @@ func WolfSSL_X509_STORE_add_cert(store *C.WOLFSSL_X509_STORE, x509 *C.WOLFSSL_X5
 }
 
 func WolfSSL_X509_STORE_load_locations(store *C.WOLFSSL_X509_STORE, capath string) int {
+	if wrapperStringHasNUL(capath) {
+		return BAD_FUNC_ARG
+	}
 	cStr := C.CString(capath)
 	defer C.free(unsafe.Pointer(cStr))
 	return int(C.X509_STORE_load_locations(store, nil, cStr))
 }
 
 func WolfSSL_X509_STORE_load_file(store *C.WOLFSSL_X509_STORE, cafile string) int {
+	if wrapperStringHasNUL(cafile) {
+		return BAD_FUNC_ARG
+	}
 	cStr := C.CString(cafile)
 	defer C.free(unsafe.Pointer(cStr))
 	return int(C.X509_STORE_load_locations(store, cStr, nil))
@@ -290,6 +299,9 @@ func WolfSSL_BIO_free(bio *WOLFSSL_BIO) int {
 }
 
 func WolfSSL_i2d_X509(x509 *WOLFSSL_X509, out *[]byte) int {
+	if out == nil {
+		return int(C.wolfSSL_i2d_X509((*C.struct_WOLFSSL_X509)(x509), nil))
+	}
 	var outPtr *C.uchar
 	result := int(C.wolfSSL_i2d_X509((*C.struct_WOLFSSL_X509)(x509), &outPtr))
 	if result > 0 && outPtr != nil {
@@ -310,6 +322,9 @@ func WolfSSL_X509_up_ref(x509 *WOLFSSL_X509) int {
 }
 
 func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen int) int {
+	if in == nil || objLen == nil || tag == nil || cls == nil {
+		return -1
+	}
 	if len(*in) == 0 || inLen < 0 || inLen > len(*in) {
 		return -1
 	}
@@ -341,7 +356,7 @@ func WolfSSL_ASN1_get_object(in *[]byte, objLen *int, tag *int, cls *int, inLen 
 }
 
 func WolfSSL_d2i_ASN1_OBJECT(a **WOLFSSL_ASN1_OBJECT, der *[]byte, length int) *WOLFSSL_ASN1_OBJECT {
-	if len(*der) == 0 || length < 0 || length > len(*der) {
+	if der == nil || len(*der) == 0 || length < 0 || length > len(*der) {
 		return nil
 	}
 
@@ -359,7 +374,13 @@ func WolfSSL_d2i_ASN1_OBJECT(a **WOLFSSL_ASN1_OBJECT, der *[]byte, length int) *
 
 	if result != nil {
 		offset := uintptr(unsafe.Pointer(cDerPtr)) - uintptr(unsafe.Pointer(cStart))
-		if offset > uintptr(len(*der)) { return nil }
+		if offset > uintptr(len(*der)) {
+			if a != nil && *a == result {
+				*a = nil
+			}
+			C.wolfSSL_ASN1_OBJECT_free((*C.struct_WOLFSSL_ASN1_OBJECT)(result))
+			return nil
+		}
 		*der = (*der)[offset:]
 	}
 
@@ -371,6 +392,9 @@ func WolfSSL_ASN1_OBJECT_free(obj *WOLFSSL_ASN1_OBJECT) {
 }
 
 func WolfSSL_OBJ_txt2obj(s string, noName int) *WOLFSSL_ASN1_OBJECT {
+	if wrapperStringHasNUL(s) {
+		return nil
+	}
 	cStr := C.CString(s)
 	defer C.free(unsafe.Pointer(cStr))
 	return (*WOLFSSL_ASN1_OBJECT)(C.wolfSSL_OBJ_txt2obj(cStr, C.int(noName)))
@@ -390,9 +414,10 @@ func WolfSSL_d2i_X509(der []byte) *WOLFSSL_X509 {
 	if len(der) == 0 {
 		return nil
 	}
-	in := (*C.uchar)(unsafe.Pointer(&der[0]))
-	pp := &in
-	return C.wolfSSL_d2i_X509(nil, (**C.uchar)(unsafe.Pointer(pp)), C.int(len(der)))
+	cBuf := C.CBytes(der)
+	defer C.free(cBuf)
+	cIn := (*C.uchar)(cBuf)
+	return C.wolfSSL_d2i_X509(nil, &cIn, C.int(len(der)))
 }
 
 // WolfSSL_X509_get_subject_name returns the Subject DN. The returned pointer
@@ -515,6 +540,14 @@ func WolfSSL_X509_get_authority_key_id(x *WOLFSSL_X509) []byte {
 	n := C.wolfx509_get_authority_key_id(x, (*C.uchar)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
 	if n <= 0 {
 		return nil
+	}
+	if int(n) > len(buf) {
+		out := make([]byte, int(n))
+		got := C.wolfx509_get_authority_key_id(x, (*C.uchar)(unsafe.Pointer(&out[0])), n)
+		if got != n {
+			return nil
+		}
+		return out
 	}
 	out := make([]byte, int(n))
 	copy(out, buf[:n])

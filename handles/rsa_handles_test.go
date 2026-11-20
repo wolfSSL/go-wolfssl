@@ -21,6 +21,7 @@
 package handles
 
 import (
+    "sync"
     "testing"
 
     wolfSSL "github.com/wolfssl/go-wolfssl"
@@ -361,5 +362,127 @@ func TestRsaVerifyPSS_Tamper(t *testing.T) {
     defer pub.Free()
     if err := RsaVerifyPSS(pub, wolfSSL.WC_HASH_TYPE_SHA256, digest, sig); err == nil {
         t.Fatalf("expected verification failure on tampered PSS signature, got nil")
+    }
+}
+
+func TestRsaKeyConcurrentVerifyAndFree(t *testing.T) {
+    priv, n, e, modBytes, cleanup := decodeRsaTestKey(t)
+    defer cleanup()
+    var rng wolfSSL.WC_RNG
+    if ret := wolfSSL.Wc_InitRng(&rng); ret != 0 {
+        t.Fatalf("wc_InitRng: %d", ret)
+    }
+    defer wolfSSL.Wc_FreeRng(&rng)
+    digest := digestForHash(t, wolfSSL.WC_HASH_TYPE_SHA256, []byte("concurrent"))
+    sig := rsaSignDigest(t, priv, wolfSSL.WC_HASH_TYPE_SHA256, digest, modBytes, &rng)
+    pss := rsaSignDigestPSS(t, priv, wolfSSL.WC_HASH_TYPE_SHA256, wolfSSL.WC_MGF1SHA256, digest, modBytes, &rng)
+
+    pub, err := ImportRsaPublicRaw(n, e)
+    if err != nil {
+        t.Fatalf("ImportRsaPublicRaw: %v", err)
+    }
+    start := make(chan struct{})
+    var wg sync.WaitGroup
+    for i := 0; i < 8; i++ {
+        wg.Add(1)
+        go func(i int) {
+            defer wg.Done()
+            <-start
+            for j := 0; j < 10; j++ {
+                if i%2 == 0 {
+                    _ = RsaVerifyPKCS1v15(pub, wolfSSL.WC_HASH_TYPE_SHA256, digest, sig)
+                } else {
+                    _ = RsaVerifyPSS(pub, wolfSSL.WC_HASH_TYPE_SHA256, digest, pss)
+                }
+            }
+        }(i)
+    }
+    for i := 0; i < 2; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            <-start
+            pub.Free()
+        }()
+    }
+    close(start)
+    wg.Wait()
+    if pub.IsLive() {
+        t.Fatal("key still live after Free")
+    }
+    if err := RsaVerifyPKCS1v15(pub, wolfSSL.WC_HASH_TYPE_SHA256, digest, sig); err == nil {
+        t.Fatal("RsaVerifyPKCS1v15 succeeded on a freed key")
+    }
+}
+
+func TestRsaKeyFreeWaitsForInFlightVerify(t *testing.T) {
+    priv, n, e, modBytes, cleanup := decodeRsaTestKey(t)
+    defer cleanup()
+    var rng wolfSSL.WC_RNG
+    if ret := wolfSSL.Wc_InitRng(&rng); ret != 0 {
+        t.Fatalf("wc_InitRng: %d", ret)
+    }
+    defer wolfSSL.Wc_FreeRng(&rng)
+    digest := digestForHash(t, wolfSSL.WC_HASH_TYPE_SHA256, []byte("in flight"))
+    sig := rsaSignDigest(t, priv, wolfSSL.WC_HASH_TYPE_SHA256, digest, modBytes, &rng)
+    pub, err := ImportRsaPublicRaw(n, e)
+    if err != nil {
+        t.Fatalf("ImportRsaPublicRaw: %v", err)
+    }
+    defer pub.Free()
+
+    entered, release := holdFirstAcquire(t)
+    verifyErr := make(chan error, 1)
+    go func() {
+        verifyErr <- RsaVerifyPKCS1v15(pub, wolfSSL.WC_HASH_TYPE_SHA256, digest, sig)
+    }()
+    <-entered
+    freed := make(chan struct{})
+    go func() {
+        pub.Free()
+        close(freed)
+    }()
+    assertBlocked(t, freed, release, "Free")
+    if err := <-verifyErr; err != nil {
+        t.Fatalf("in-flight RsaVerifyPKCS1v15: %v", err)
+    }
+    if pub.IsLive() {
+        t.Fatal("key still live after Free")
+    }
+}
+
+func TestRsaKeyLivenessCheckableUnderLock(t *testing.T) {
+    _, n, e, _, cleanup := decodeRsaTestKey(t)
+    defer cleanup()
+    pub, err := ImportRsaPublicRaw(n, e)
+    if err != nil {
+        t.Fatalf("ImportRsaPublicRaw: %v", err)
+    }
+    pub.Lock()
+    live := pub.IsLive()
+    pub.Unlock()
+    if !live {
+        t.Fatal("imported key not live under Lock")
+    }
+    pub.Free()
+    pub.Lock()
+    live = pub.IsLive()
+    pub.Unlock()
+    if live {
+        t.Fatal("freed key reported live under Lock")
+    }
+}
+
+func TestRsaKeyMarkLiveAfterFreeStaysDead(t *testing.T) {
+    _, n, e, _, cleanup := decodeRsaTestKey(t)
+    defer cleanup()
+    pub, err := ImportRsaPublicRaw(n, e)
+    if err != nil {
+        t.Fatalf("ImportRsaPublicRaw: %v", err)
+    }
+    pub.Free()
+    pub.MarkLive()
+    if pub.IsLive() {
+        t.Fatal("MarkLive revived a freed key")
     }
 }

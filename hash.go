@@ -36,6 +36,7 @@ package wolfSSL
 // #endif
 // #ifdef NO_SHA256
 // #define WC_SHA256_DIGEST_SIZE 1
+// #define WC_SHA256 WC_HASH_TYPE_SHA256
 // int wc_Sha256Hash(const byte* data, word32 len, byte* hash) {
 //      return -174;
 //  }

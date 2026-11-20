@@ -26,7 +26,7 @@ jobs:
     if: github.repository_owner == 'wolfssl'
     runs-on: ${{ matrix.os }}
     # This should be a safe limit for the tests to run.
-    timeout-minutes: 14
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +45,8 @@ jobs:
           path: |
             /tmp/wolfssl-install-all
             /tmp/wolfssl-install-default
+            /tmp/wolfssl-install-reduced1
+            /tmp/wolfssl-install-reduced2
           key: wolfssl-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
 
       - name: Build native wolfSSL (full + default configs, single clone)
@@ -63,6 +65,19 @@ jobs:
           ./configure --prefix=/tmp/wolfssl-install-default
           make -j$(nproc)
           make install
+          # Reduced configs (library only) for the optional-feature stubs.
+          make clean
+          ./configure --prefix=/tmp/wolfssl-install-reduced1 \
+            --disable-sni --disable-aes --disable-aesgcm --disable-aescbc \
+            --enable-certgen --enable-certext CPPFLAGS=-DWOLFSSL_ALT_NAMES
+          make -j$(nproc) src/libwolfssl.la
+          make install-exec install-data
+          make clean
+          ./configure --prefix=/tmp/wolfssl-install-reduced2 \
+            --disable-sha256 --disable-rsa --enable-pwdbased \
+            --disable-pkcs8 --disable-pkcs12 CPPFLAGS=-DWOLFSSL_NO_PEM
+          make -j$(nproc) src/libwolfssl.la
+          make install-exec install-data
 
       - name: Install wolfSSL (full config) system-wide
         run: |
@@ -71,9 +86,7 @@ jobs:
           sudo ldconfig
 
       - name: Install Go dependencies
-        run: |
-          go get golang.org/x/term
-          go mod tidy
+        run: go mod download
 
       - name: Smoke test generateOptions.sh
         run: |
@@ -123,6 +136,9 @@ jobs:
       - name: Run wolfx509 tests (full config)
         run: go test ./wolfx509
 
+      - name: Run root package tests (full config)
+        run: go test .
+
       # ---- Default-config phase: validate the #ifdef stub paths against
       # a plain ./configure wolfSSL
       - name: Install wolfSSL (default config) system-wide
@@ -148,6 +164,27 @@ jobs:
 
       - name: Run handles tests (default config)
         run: go test ./handles
+
+      - name: Run wolftls fallback tests (default config)
+        # No OPENSSL_EXTRA or WOLFSSL_CERT_SETUP_CB here, so these hit the
+        # native version-bound and GetCertificate-unavailable paths.
+        run: go test -run 'TestVersionBoundsApplied|TestMinVersionFloorRejectsOlderPeer|TestMaxVersionBelowCeilingEnforcedOrRejected|TestGetCertificateRejectionIsEnforced' ./wolftls
+
+      - name: Build against reduced wolfSSL configs
+        run: |
+          set -e
+          has() { grep -q "^#define $2\$" "/tmp/wolfssl-install-$1/include/wolfssl/options.h"; }
+          for m in NO_AES WOLFSSL_ALT_NAMES; do has reduced1 $m; done
+          if has reduced1 HAVE_SNI; then echo "reduced1 has HAVE_SNI"; exit 1; fi
+          for m in NO_SHA256 NO_RSA NO_PKCS8 WOLFSSL_NO_PEM; do has reduced2 $m; done
+          # -run '^$' links each test binary against the reduced library
+          # without running tests that assume the full feature set.
+          ./generateOptions.sh /tmp/wolfssl-install-reduced1
+          go vet .
+          go test -run '^$' ./wolftls ./wolfx509
+          ./generateOptions.sh /tmp/wolfssl-install-reduced2
+          go vet .
+          go test -run '^$' ./wolftls ./handles
 
       - name: Show logs on failure
         if: failure() || cancelled()

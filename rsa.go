@@ -73,13 +73,13 @@ package wolfSSL
 // int wc_RsaPSS_VerifyCheck(const byte* in, word32 inLen,
 //                           byte* out, word32 outLen,
 //                           const byte* digest, word32 digestLen,
-//                           int hash, int mgf, RsaKey* key) {
+//                           enum wc_HashType hash, int mgf, RsaKey* key) {
 //     (void)in; (void)inLen; (void)out; (void)outLen;
 //     (void)digest; (void)digestLen; (void)hash; (void)mgf; (void)key;
 //     return -174;
 // }
 // int wc_RsaPSS_Sign_ex(const byte* in, word32 inLen, byte* out,
-//                       word32 outLen, int hash, int mgf, int saltLen,
+//                       word32 outLen, enum wc_HashType hash, int mgf, int saltLen,
 //                       RsaKey* key, WC_RNG* rng) {
 //     (void)in; (void)inLen; (void)out; (void)outLen;
 //     (void)hash; (void)mgf; (void)saltLen; (void)key; (void)rng;
